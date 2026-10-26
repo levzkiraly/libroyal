@@ -25,6 +25,10 @@ in database backups, never here.
 | `baseline` | The structure as it existed before Sqitch (2026-10-21): `works`, `work_contributors`, `persons`, `series`, `tags`, `work_tags`, `work_copies` |
 | `lo_bibliography` | The view LibreOffice reads through `libroyal.odb`; its column list is a contract (see `verify/lo_bibliography.sql`) |
 | `@baseline` | Tag marking the pre-Sqitch starting point |
+| `legacy_rename` | Old tables (and their constraints, indexes, sequences) renamed to `legacy_*`; `lo_bibliography` keeps reading them |
+
+A second target, `dev` (`libroyal_dev`), is configured for trying changes before they
+reach the live database: `sqitch deploy --verify dev`.
 
 The live database was registered with `sqitch deploy --log-only`: the baseline
 scripts were recorded as deployed without being run against it.

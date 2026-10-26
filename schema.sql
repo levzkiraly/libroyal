@@ -20,10 +20,10 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
--- Name: persons; Type: TABLE; Schema: public; Owner: -
+-- Name: legacy_persons; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.persons (
+CREATE TABLE public.legacy_persons (
     id bigint NOT NULL,
     family_name text NOT NULL,
     given_name text,
@@ -33,10 +33,29 @@ CREATE TABLE public.persons (
 
 
 --
--- Name: series; Type: TABLE; Schema: public; Owner: -
+-- Name: legacy_persons_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.series (
+CREATE SEQUENCE public.legacy_persons_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: legacy_persons_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.legacy_persons_id_seq OWNED BY public.legacy_persons.id;
+
+
+--
+-- Name: legacy_series; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.legacy_series (
     id bigint NOT NULL,
     name character varying(255) NOT NULL,
     issn character varying(9)
@@ -44,33 +63,71 @@ CREATE TABLE public.series (
 
 
 --
--- Name: tags; Type: TABLE; Schema: public; Owner: -
+-- Name: legacy_series_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.tags (
+CREATE SEQUENCE public.legacy_series_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: legacy_series_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.legacy_series_id_seq OWNED BY public.legacy_series.id;
+
+
+--
+-- Name: legacy_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.legacy_tags (
     id bigint NOT NULL,
     name text NOT NULL
 );
 
 
 --
--- Name: work_contributors; Type: TABLE; Schema: public; Owner: -
+-- Name: legacy_tags_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.work_contributors (
+CREATE SEQUENCE public.legacy_tags_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: legacy_tags_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.legacy_tags_id_seq OWNED BY public.legacy_tags.id;
+
+
+--
+-- Name: legacy_work_contributors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.legacy_work_contributors (
     work_id bigint NOT NULL,
     person_id bigint NOT NULL,
     role text NOT NULL,
     "position" integer NOT NULL,
-    CONSTRAINT work_contributors_position_check CHECK (("position" > 0))
+    CONSTRAINT legacy_work_contributors_position_check CHECK (("position" > 0))
 );
 
 
 --
--- Name: work_copies; Type: TABLE; Schema: public; Owner: -
+-- Name: legacy_work_copies; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.work_copies (
+CREATE TABLE public.legacy_work_copies (
     id bigint NOT NULL,
     work_id bigint NOT NULL,
     location_type character varying(12) NOT NULL,
@@ -80,20 +137,39 @@ CREATE TABLE public.work_copies (
 
 
 --
--- Name: work_tags; Type: TABLE; Schema: public; Owner: -
+-- Name: legacy_work_copies_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.work_tags (
+CREATE SEQUENCE public.legacy_work_copies_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: legacy_work_copies_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.legacy_work_copies_id_seq OWNED BY public.legacy_work_copies.id;
+
+
+--
+-- Name: legacy_work_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.legacy_work_tags (
     work_id bigint NOT NULL,
     tag_id bigint NOT NULL
 );
 
 
 --
--- Name: works; Type: TABLE; Schema: public; Owner: -
+-- Name: legacy_works; Type: TABLE; Schema: public; Owner: -
 --
 
-CREATE TABLE public.works (
+CREATE TABLE public.legacy_works (
     id bigint NOT NULL,
     type text NOT NULL,
     title text NOT NULL,
@@ -113,8 +189,27 @@ CREATE TABLE public.works (
     number character varying(12),
     booktitle text,
     edition text,
-    CONSTRAINT works_type_lo_check CHECK ((type = ANY (ARRAY['article'::text, 'book'::text, 'booklet'::text, 'conference'::text, 'inbook'::text, 'incollection'::text, 'inproceedings'::text, 'journal'::text, 'manual'::text, 'mastersthesis'::text, 'misc'::text, 'phdthesis'::text, 'proceedings'::text, 'techreport'::text, 'unpublished'::text, 'email'::text, 'www'::text, 'custom1'::text, 'custom2'::text, 'custom3'::text, 'custom4'::text, 'custom5'::text])))
+    CONSTRAINT legacy_works_type_lo_check CHECK ((type = ANY (ARRAY['article'::text, 'book'::text, 'booklet'::text, 'conference'::text, 'inbook'::text, 'incollection'::text, 'inproceedings'::text, 'journal'::text, 'manual'::text, 'mastersthesis'::text, 'misc'::text, 'phdthesis'::text, 'proceedings'::text, 'techreport'::text, 'unpublished'::text, 'email'::text, 'www'::text, 'custom1'::text, 'custom2'::text, 'custom3'::text, 'custom4'::text, 'custom5'::text])))
 );
+
+
+--
+-- Name: legacy_works_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.legacy_works_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: legacy_works_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.legacy_works_id_seq OWNED BY public.legacy_works.id;
 
 
 --
@@ -130,8 +225,8 @@ CREATE VIEW public.lo_bibliography AS
                     WHEN ((p.given_name IS NULL) OR (p.given_name = ''::text)) THEN p.family_name
                     ELSE ((p.family_name || ', '::text) || p.given_name)
                 END, '; '::text ORDER BY wc."position") AS author_full_names
-           FROM (public.work_contributors wc
-             JOIN public.persons p ON ((p.id = wc.person_id)))
+           FROM (public.legacy_work_contributors wc
+             JOIN public.legacy_persons p ON ((p.id = wc.person_id)))
           WHERE (wc.role = 'author'::text)
           GROUP BY wc.work_id
         ), editor_names AS (
@@ -142,8 +237,8 @@ CREATE VIEW public.lo_bibliography AS
                     WHEN ((p.given_name IS NULL) OR (p.given_name = ''::text)) THEN p.family_name
                     ELSE ((p.family_name || ', '::text) || p.given_name)
                 END, '; '::text ORDER BY wc."position") AS editor_full_names
-           FROM (public.work_contributors wc
-             JOIN public.persons p ON ((p.id = wc.person_id)))
+           FROM (public.legacy_work_contributors wc
+             JOIN public.legacy_persons p ON ((p.id = wc.person_id)))
           WHERE (wc.role = 'editor'::text)
           GROUP BY wc.work_id
         ), translator_names AS (
@@ -153,20 +248,20 @@ CREATE VIEW public.lo_bibliography AS
                     WHEN ((p.given_name IS NULL) OR (p.given_name = ''::text)) THEN p.family_name
                     ELSE ((p.family_name || ', '::text) || p.given_name)
                 END, '; '::text ORDER BY wc."position") AS translator_full_names
-           FROM (public.work_contributors wc
-             JOIN public.persons p ON ((p.id = wc.person_id)))
+           FROM (public.legacy_work_contributors wc
+             JOIN public.legacy_persons p ON ((p.id = wc.person_id)))
           WHERE (wc.role = 'translator'::text)
           GROUP BY wc.work_id
         ), tag_names AS (
          SELECT wt.work_id,
             string_agg(t.name, '; '::text ORDER BY t.name) AS tag_list
-           FROM (public.work_tags wt
-             JOIN public.tags t ON ((t.id = wt.tag_id)))
+           FROM (public.legacy_work_tags wt
+             JOIN public.legacy_tags t ON ((t.id = wt.tag_id)))
           GROUP BY wt.work_id
         ), local_copies AS (
          SELECT DISTINCT ON (wc.work_id) wc.work_id,
             wc.url
-           FROM public.work_copies wc
+           FROM public.legacy_work_copies wc
           WHERE ((wc.location_type)::text = 'local'::text)
           ORDER BY wc.work_id, wc.id DESC
         ), base AS (
@@ -198,12 +293,12 @@ CREATE VIEW public.lo_bibliography AS
             s.name AS series_name,
             w.number AS series_number,
             lc.url AS local_url
-           FROM ((((((public.works w
+           FROM ((((((public.legacy_works w
              LEFT JOIN author_names an ON ((an.work_id = w.id)))
              LEFT JOIN editor_names en ON ((en.work_id = w.id)))
              LEFT JOIN translator_names tr ON ((tr.work_id = w.id)))
              LEFT JOIN tag_names tg ON ((tg.work_id = w.id)))
-             LEFT JOIN public.series s ON ((s.id = w.series_id)))
+             LEFT JOIN public.legacy_series s ON ((s.id = w.series_id)))
              LEFT JOIN local_copies lc ON ((lc.work_id = w.id)))
         ), keyed AS (
          SELECT base.id,
@@ -299,295 +394,200 @@ CREATE VIEW public.lo_bibliography AS
 
 
 --
--- Name: persons_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: legacy_persons id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE public.persons_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
+ALTER TABLE ONLY public.legacy_persons ALTER COLUMN id SET DEFAULT nextval('public.legacy_persons_id_seq'::regclass);
 
 
 --
--- Name: persons_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: legacy_series id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE public.persons_id_seq OWNED BY public.persons.id;
+ALTER TABLE ONLY public.legacy_series ALTER COLUMN id SET DEFAULT nextval('public.legacy_series_id_seq'::regclass);
 
 
 --
--- Name: series_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: legacy_tags id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE public.series_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
+ALTER TABLE ONLY public.legacy_tags ALTER COLUMN id SET DEFAULT nextval('public.legacy_tags_id_seq'::regclass);
 
 
 --
--- Name: series_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: legacy_work_copies id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE public.series_id_seq OWNED BY public.series.id;
+ALTER TABLE ONLY public.legacy_work_copies ALTER COLUMN id SET DEFAULT nextval('public.legacy_work_copies_id_seq'::regclass);
 
 
 --
--- Name: tags_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: legacy_works id; Type: DEFAULT; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE public.tags_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
+ALTER TABLE ONLY public.legacy_works ALTER COLUMN id SET DEFAULT nextval('public.legacy_works_id_seq'::regclass);
 
 
 --
--- Name: tags_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: legacy_persons legacy_persons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE public.tags_id_seq OWNED BY public.tags.id;
+ALTER TABLE ONLY public.legacy_persons
+    ADD CONSTRAINT legacy_persons_pkey PRIMARY KEY (id);
 
 
 --
--- Name: work_copies_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: legacy_series legacy_series_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE public.work_copies_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
+ALTER TABLE ONLY public.legacy_series
+    ADD CONSTRAINT legacy_series_pkey PRIMARY KEY (id);
 
 
 --
--- Name: work_copies_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: legacy_tags legacy_tags_name_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE public.work_copies_id_seq OWNED BY public.work_copies.id;
+ALTER TABLE ONLY public.legacy_tags
+    ADD CONSTRAINT legacy_tags_name_key UNIQUE (name);
 
 
 --
--- Name: works_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+-- Name: legacy_tags legacy_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-CREATE SEQUENCE public.works_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
+ALTER TABLE ONLY public.legacy_tags
+    ADD CONSTRAINT legacy_tags_pkey PRIMARY KEY (id);
 
 
 --
--- Name: works_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+-- Name: legacy_work_contributors legacy_work_contributors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER SEQUENCE public.works_id_seq OWNED BY public.works.id;
+ALTER TABLE ONLY public.legacy_work_contributors
+    ADD CONSTRAINT legacy_work_contributors_pkey PRIMARY KEY (work_id, person_id, role);
 
 
 --
--- Name: persons id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: legacy_work_contributors legacy_work_contributors_unique_position; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.persons ALTER COLUMN id SET DEFAULT nextval('public.persons_id_seq'::regclass);
+ALTER TABLE ONLY public.legacy_work_contributors
+    ADD CONSTRAINT legacy_work_contributors_unique_position UNIQUE (work_id, role, "position");
 
 
 --
--- Name: series id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: legacy_work_copies legacy_work_copies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.series ALTER COLUMN id SET DEFAULT nextval('public.series_id_seq'::regclass);
+ALTER TABLE ONLY public.legacy_work_copies
+    ADD CONSTRAINT legacy_work_copies_pkey PRIMARY KEY (id);
 
 
 --
--- Name: tags id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: legacy_work_tags legacy_work_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.tags ALTER COLUMN id SET DEFAULT nextval('public.tags_id_seq'::regclass);
+ALTER TABLE ONLY public.legacy_work_tags
+    ADD CONSTRAINT legacy_work_tags_pkey PRIMARY KEY (work_id, tag_id);
 
 
 --
--- Name: work_copies id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: legacy_works legacy_works_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.work_copies ALTER COLUMN id SET DEFAULT nextval('public.work_copies_id_seq'::regclass);
+ALTER TABLE ONLY public.legacy_works
+    ADD CONSTRAINT legacy_works_pkey PRIMARY KEY (id);
 
 
 --
--- Name: works id; Type: DEFAULT; Schema: public; Owner: -
+-- Name: legacy_idx_persons_family_name; Type: INDEX; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.works ALTER COLUMN id SET DEFAULT nextval('public.works_id_seq'::regclass);
+CREATE INDEX legacy_idx_persons_family_name ON public.legacy_persons USING btree (family_name);
 
 
 --
--- Name: persons persons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_idx_tags_name; Type: INDEX; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.persons
-    ADD CONSTRAINT persons_pkey PRIMARY KEY (id);
+CREATE INDEX legacy_idx_tags_name ON public.legacy_tags USING btree (name);
 
 
 --
--- Name: series series_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_idx_work_contributors_person; Type: INDEX; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.series
-    ADD CONSTRAINT series_pkey PRIMARY KEY (id);
+CREATE INDEX legacy_idx_work_contributors_person ON public.legacy_work_contributors USING btree (person_id);
 
 
 --
--- Name: tags tags_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_idx_work_contributors_work_role; Type: INDEX; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.tags
-    ADD CONSTRAINT tags_name_key UNIQUE (name);
+CREATE INDEX legacy_idx_work_contributors_work_role ON public.legacy_work_contributors USING btree (work_id, role);
 
 
 --
--- Name: tags tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_idx_works_type; Type: INDEX; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.tags
-    ADD CONSTRAINT tags_pkey PRIMARY KEY (id);
+CREATE INDEX legacy_idx_works_type ON public.legacy_works USING btree (type);
 
 
 --
--- Name: work_contributors work_contributors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_idx_works_year; Type: INDEX; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.work_contributors
-    ADD CONSTRAINT work_contributors_pkey PRIMARY KEY (work_id, person_id, role);
+CREATE INDEX legacy_idx_works_year ON public.legacy_works USING btree (year);
 
 
 --
--- Name: work_contributors work_contributors_unique_position; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_work_contributors legacy_work_contributors_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.work_contributors
-    ADD CONSTRAINT work_contributors_unique_position UNIQUE (work_id, role, "position");
+ALTER TABLE ONLY public.legacy_work_contributors
+    ADD CONSTRAINT legacy_work_contributors_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.legacy_persons(id) ON DELETE RESTRICT;
 
 
 --
--- Name: work_copies work_copies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_work_contributors legacy_work_contributors_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.work_copies
-    ADD CONSTRAINT work_copies_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.legacy_work_contributors
+    ADD CONSTRAINT legacy_work_contributors_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.legacy_works(id) ON DELETE CASCADE;
 
 
 --
--- Name: work_tags work_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_work_copies legacy_work_copies_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.work_tags
-    ADD CONSTRAINT work_tags_pkey PRIMARY KEY (work_id, tag_id);
+ALTER TABLE ONLY public.legacy_work_copies
+    ADD CONSTRAINT legacy_work_copies_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.legacy_works(id) ON DELETE CASCADE;
 
 
 --
--- Name: works works_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: legacy_work_tags legacy_work_tags_tag_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.works
-    ADD CONSTRAINT works_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.legacy_work_tags
+    ADD CONSTRAINT legacy_work_tags_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES public.legacy_tags(id) ON DELETE CASCADE;
 
 
 --
--- Name: idx_persons_family_name; Type: INDEX; Schema: public; Owner: -
+-- Name: legacy_work_tags legacy_work_tags_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_persons_family_name ON public.persons USING btree (family_name);
+ALTER TABLE ONLY public.legacy_work_tags
+    ADD CONSTRAINT legacy_work_tags_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.legacy_works(id) ON DELETE CASCADE;
 
 
 --
--- Name: idx_tags_name; Type: INDEX; Schema: public; Owner: -
+-- Name: legacy_works legacy_works_series_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
-CREATE INDEX idx_tags_name ON public.tags USING btree (name);
-
-
---
--- Name: idx_work_contributors_person; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_work_contributors_person ON public.work_contributors USING btree (person_id);
-
-
---
--- Name: idx_work_contributors_work_role; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_work_contributors_work_role ON public.work_contributors USING btree (work_id, role);
-
-
---
--- Name: idx_works_type; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_works_type ON public.works USING btree (type);
-
-
---
--- Name: idx_works_year; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_works_year ON public.works USING btree (year);
-
-
---
--- Name: work_contributors work_contributors_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.work_contributors
-    ADD CONSTRAINT work_contributors_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.persons(id) ON DELETE RESTRICT;
-
-
---
--- Name: work_contributors work_contributors_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.work_contributors
-    ADD CONSTRAINT work_contributors_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
-
-
---
--- Name: work_copies work_copies_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.work_copies
-    ADD CONSTRAINT work_copies_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
-
-
---
--- Name: work_tags work_tags_tag_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.work_tags
-    ADD CONSTRAINT work_tags_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES public.tags(id) ON DELETE CASCADE;
-
-
---
--- Name: work_tags work_tags_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.work_tags
-    ADD CONSTRAINT work_tags_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
-
-
---
--- Name: works works_series_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.works
-    ADD CONSTRAINT works_series_id_fkey FOREIGN KEY (series_id) REFERENCES public.series(id) ON DELETE SET NULL;
+ALTER TABLE ONLY public.legacy_works
+    ADD CONSTRAINT legacy_works_series_id_fkey FOREIGN KEY (series_id) REFERENCES public.legacy_series(id) ON DELETE SET NULL;
 
 
 --
