@@ -7,3 +7,4 @@ lo_bibliography [baseline] 2026-10-21T20:00:36Z Lev Z. Király <lev.z.kiraly@gma
 
 legacy_rename [baseline lo_bibliography] 2026-10-26T01:42:19Z Lev Z. Király <lev.z.kiraly@gmail.com> # Rename pre-LRM tables and their constraints/indexes/sequences to legacy_*
 vocabularies 2026-10-26T01:42:20Z Lev Z. Király <lev.z.kiraly@gmail.com> # Controlled vocabularies: kinds, languages, scripts, conversion schemes, categories, relation types, roles, identifier schemes, title/statement/imprint terms, basis, certainty
+wemi_core [vocabularies] 2026-10-26T01:42:20Z Lev Z. Király <lev.z.kiraly@gmail.com> # res supertable, works/expressions/manifestations/items, titles, manifestation statements, imprints

@@ -15,6 +15,28 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
+--
+-- Name: new_res(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.new_res(p_kind text) RETURNS bigint
+    LANGUAGE sql
+    AS $$ INSERT INTO public.res (kind) VALUES (p_kind) RETURNING id $$;
+
+
+--
+-- Name: res_delete(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.res_delete() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    DELETE FROM public.res WHERE id = OLD.id;
+    RETURN NULL;
+END $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -64,6 +86,32 @@ CREATE TABLE public.conversion_schemes (
 
 
 --
+-- Name: expressions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.expressions (
+    id bigint DEFAULT public.new_res('expression'::text) NOT NULL,
+    kind text DEFAULT 'expression'::text NOT NULL,
+    work_id bigint NOT NULL,
+    lang text,
+    script text,
+    date_text text,
+    date_sort integer,
+    date_sort_end integer,
+    note text,
+    CONSTRAINT expressions_check CHECK ((date_sort_end >= date_sort)),
+    CONSTRAINT expressions_kind_check CHECK ((kind = 'expression'::text))
+);
+
+
+--
+-- Name: COLUMN expressions.work_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.expressions.work_id IS 'LRM-R2: the one work this expression realizes';
+
+
+--
 -- Name: identifier_schemes; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -89,6 +137,25 @@ CREATE TABLE public.identifier_statuses (
 
 
 --
+-- Name: imprint_agents; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.imprint_agents (
+    imprint_id bigint NOT NULL,
+    "position" integer NOT NULL,
+    agent_id bigint,
+    agent_kind text DEFAULT 'agent'::text NOT NULL,
+    as_printed text,
+    basis text DEFAULT 'transcribed'::text NOT NULL,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT imprint_agents_agent_kind_check CHECK ((agent_kind = 'agent'::text)),
+    CONSTRAINT imprint_agents_check CHECK (((agent_id IS NOT NULL) OR (as_printed IS NOT NULL))),
+    CONSTRAINT imprint_agents_position_check CHECK (("position" > 0))
+);
+
+
+--
 -- Name: imprint_functions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -98,6 +165,113 @@ CREATE TABLE public.imprint_functions (
     label_hu text,
     lrm_id text
 );
+
+
+--
+-- Name: imprint_places; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.imprint_places (
+    imprint_id bigint NOT NULL,
+    "position" integer NOT NULL,
+    place_id bigint,
+    place_kind text DEFAULT 'place'::text NOT NULL,
+    as_printed text,
+    basis text DEFAULT 'transcribed'::text NOT NULL,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT imprint_places_check CHECK (((place_id IS NOT NULL) OR (as_printed IS NOT NULL))),
+    CONSTRAINT imprint_places_place_kind_check CHECK ((place_kind = 'place'::text)),
+    CONSTRAINT imprint_places_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: imprints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.imprints (
+    id bigint NOT NULL,
+    manifestation_id bigint NOT NULL,
+    function text DEFAULT 'publication'::text NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    date_as_printed text,
+    date_text text,
+    date_sort integer,
+    date_sort_end integer,
+    date_basis text,
+    date_certainty text DEFAULT 'certain'::text NOT NULL,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    note text,
+    CONSTRAINT imprints_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT imprints_check1 CHECK ((date_sort_end >= date_sort)),
+    CONSTRAINT imprints_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: COLUMN imprints.date_as_printed; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.imprints.date_as_printed IS 'the date exactly as on the resource (e.g. 1985 where 1958 is correct)';
+
+
+--
+-- Name: COLUMN imprints.date_text; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.imprints.date_text IS 'the established date as to be displayed';
+
+
+--
+-- Name: imprints_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.imprints ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.imprints_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.items (
+    id bigint DEFAULT public.new_res('item'::text) NOT NULL,
+    kind text DEFAULT 'item'::text NOT NULL,
+    manifestation_id bigint NOT NULL,
+    holder_id bigint,
+    holder_kind text DEFAULT 'agent'::text NOT NULL,
+    location text,
+    path text,
+    url text,
+    mime_type text,
+    note text,
+    CONSTRAINT items_holder_kind_check CHECK ((holder_kind = 'agent'::text)),
+    CONSTRAINT items_kind_check CHECK ((kind = 'item'::text))
+);
+
+
+--
+-- Name: COLUMN items.location; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.items.location IS 'place within the holding (room, shelf); not a shelfmark — shelfmarks are identifiers';
+
+
+--
+-- Name: COLUMN items.path; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.items.path IS 'local file path of a digital item';
 
 
 --
@@ -499,6 +673,69 @@ CREATE TABLE public.manifestation_categories (
 
 
 --
+-- Name: manifestation_expressions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manifestation_expressions (
+    manifestation_id bigint NOT NULL,
+    expression_id bigint NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    CONSTRAINT manifestation_expressions_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: manifestation_statements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manifestation_statements (
+    id bigint NOT NULL,
+    manifestation_id bigint NOT NULL,
+    statement_type text NOT NULL,
+    source text,
+    value text NOT NULL,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text DEFAULT 'transcribed'::text NOT NULL,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    note text,
+    CONSTRAINT manifestation_statements_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT manifestation_statements_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: manifestation_statements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.manifestation_statements ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.manifestation_statements_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: manifestations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manifestations (
+    id bigint DEFAULT public.new_res('manifestation'::text) NOT NULL,
+    kind text DEFAULT 'manifestation'::text NOT NULL,
+    category text NOT NULL,
+    extent text,
+    note text,
+    CONSTRAINT manifestations_kind_check CHECK ((kind = 'manifestation'::text))
+);
+
+
+--
 -- Name: place_name_types; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -507,6 +744,81 @@ CREATE TABLE public.place_name_types (
     label_en text NOT NULL,
     label_hu text
 );
+
+
+--
+-- Name: qa_manifestations_without_expression; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.qa_manifestations_without_expression AS
+ SELECT id,
+    category
+   FROM public.manifestations m
+  WHERE (NOT (EXISTS ( SELECT 1
+           FROM public.manifestation_expressions me
+          WHERE (me.manifestation_id = m.id))));
+
+
+--
+-- Name: res; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.res (
+    id bigint NOT NULL,
+    kind text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: works; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.works (
+    id bigint DEFAULT public.new_res('work'::text) NOT NULL,
+    kind text DEFAULT 'work'::text NOT NULL,
+    category text NOT NULL,
+    date_text text,
+    date_sort integer,
+    date_sort_end integer,
+    note text,
+    CONSTRAINT works_check CHECK ((date_sort_end >= date_sort)),
+    CONSTRAINT works_kind_check CHECK ((kind = 'work'::text))
+);
+
+
+--
+-- Name: COLUMN works.date_text; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.works.date_text IS 'date of the work (of its creation) as to be displayed';
+
+
+--
+-- Name: COLUMN works.date_sort; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.works.date_sort IS 'first year, for sorting and filtering';
+
+
+--
+-- Name: qa_orphan_res; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.qa_orphan_res AS
+ SELECT id,
+    kind,
+    created_at
+   FROM public.res r
+  WHERE (((kind = 'work'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM public.works x
+          WHERE (x.id = r.id))))) OR ((kind = 'expression'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM public.expressions x
+          WHERE (x.id = r.id))))) OR ((kind = 'manifestation'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM public.manifestations x
+          WHERE (x.id = r.id))))) OR ((kind = 'item'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM public.items x
+          WHERE (x.id = r.id))))));
 
 
 --
@@ -522,6 +834,20 @@ CREATE TABLE public.relation_types (
     domain_kind text NOT NULL,
     range_kind text NOT NULL,
     note text
+);
+
+
+--
+-- Name: res_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.res ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.res_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -597,6 +923,53 @@ CREATE TABLE public.title_types (
 
 
 --
+-- Name: titles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.titles (
+    id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    title_type text NOT NULL,
+    source text,
+    value text NOT NULL,
+    subtitle text,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    note text,
+    CONSTRAINT titles_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT titles_position_check CHECK (("position" > 0)),
+    CONSTRAINT titles_res_kind_check CHECK ((res_kind = ANY (ARRAY['work'::text, 'expression'::text, 'manifestation'::text])))
+);
+
+
+--
+-- Name: COLUMN titles.source; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.titles.source IS 'for manifestations: where the title was transcribed from';
+
+
+--
+-- Name: titles_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.titles ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.titles_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: work_categories; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -668,6 +1041,14 @@ ALTER TABLE ONLY public.conversion_schemes
 
 
 --
+-- Name: expressions expressions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.expressions
+    ADD CONSTRAINT expressions_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: identifier_schemes identifier_schemes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -684,11 +1065,51 @@ ALTER TABLE ONLY public.identifier_statuses
 
 
 --
+-- Name: imprint_agents imprint_agents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_agents
+    ADD CONSTRAINT imprint_agents_pkey PRIMARY KEY (imprint_id, "position");
+
+
+--
 -- Name: imprint_functions imprint_functions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.imprint_functions
     ADD CONSTRAINT imprint_functions_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: imprint_places imprint_places_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_places
+    ADD CONSTRAINT imprint_places_pkey PRIMARY KEY (imprint_id, "position");
+
+
+--
+-- Name: imprints imprints_id_manifestation_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_id_manifestation_id_key UNIQUE (id, manifestation_id);
+
+
+--
+-- Name: imprints imprints_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: items items_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.items
+    ADD CONSTRAINT items_pkey PRIMARY KEY (id);
 
 
 --
@@ -780,6 +1201,38 @@ ALTER TABLE ONLY public.manifestation_categories
 
 
 --
+-- Name: manifestation_expressions manifestation_expressions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_expressions
+    ADD CONSTRAINT manifestation_expressions_pkey PRIMARY KEY (manifestation_id, expression_id);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_id_manifestation_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_id_manifestation_id_key UNIQUE (id, manifestation_id);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: manifestations manifestations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestations
+    ADD CONSTRAINT manifestations_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: place_name_types place_name_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -804,11 +1257,27 @@ ALTER TABLE ONLY public.relation_types
 
 
 --
+-- Name: res res_id_kind_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.res
+    ADD CONSTRAINT res_id_kind_key UNIQUE (id, kind);
+
+
+--
 -- Name: res_kinds res_kinds_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.res_kinds
     ADD CONSTRAINT res_kinds_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: res res_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.res
+    ADD CONSTRAINT res_pkey PRIMARY KEY (id);
 
 
 --
@@ -860,11 +1329,91 @@ ALTER TABLE ONLY public.title_types
 
 
 --
+-- Name: titles titles_id_res_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_id_res_id_key UNIQUE (id, res_id);
+
+
+--
+-- Name: titles titles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: work_categories work_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.work_categories
     ADD CONSTRAINT work_categories_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: works works_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.works
+    ADD CONSTRAINT works_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: idx_expressions_work; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_expressions_work ON public.expressions USING btree (work_id);
+
+
+--
+-- Name: idx_imprint_agents_agent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_imprint_agents_agent ON public.imprint_agents USING btree (agent_id);
+
+
+--
+-- Name: idx_imprint_places_place; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_imprint_places_place ON public.imprint_places USING btree (place_id);
+
+
+--
+-- Name: idx_imprints_manifestation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_imprints_manifestation ON public.imprints USING btree (manifestation_id);
+
+
+--
+-- Name: idx_items_manifestation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_items_manifestation ON public.items USING btree (manifestation_id);
+
+
+--
+-- Name: idx_manifestation_expressions_expression; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_manifestation_expressions_expression ON public.manifestation_expressions USING btree (expression_id);
+
+
+--
+-- Name: idx_manifestation_statements_manifestation; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_manifestation_statements_manifestation ON public.manifestation_statements USING btree (manifestation_id);
+
+
+--
+-- Name: idx_titles_res; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_titles_res ON public.titles USING btree (res_id);
 
 
 --
@@ -910,6 +1459,34 @@ CREATE INDEX legacy_idx_works_year ON public.legacy_works USING btree (year);
 
 
 --
+-- Name: expressions expressions_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER expressions_res_delete AFTER DELETE ON public.expressions FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: items items_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER items_res_delete AFTER DELETE ON public.items FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: manifestations manifestations_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER manifestations_res_delete AFTER DELETE ON public.manifestations FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: works works_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER works_res_delete AFTER DELETE ON public.works FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
 -- Name: conversion_schemes conversion_schemes_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -934,11 +1511,195 @@ ALTER TABLE ONLY public.conversion_schemes
 
 
 --
+-- Name: expressions expressions_id_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.expressions
+    ADD CONSTRAINT expressions_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: expressions expressions_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.expressions
+    ADD CONSTRAINT expressions_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: expressions expressions_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.expressions
+    ADD CONSTRAINT expressions_script_fkey FOREIGN KEY (script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: expressions expressions_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.expressions
+    ADD CONSTRAINT expressions_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE RESTRICT;
+
+
+--
 -- Name: identifier_schemes identifier_schemes_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.identifier_schemes
     ADD CONSTRAINT identifier_schemes_res_kind_fkey FOREIGN KEY (res_kind) REFERENCES public.res_kinds(code);
+
+
+--
+-- Name: imprint_agents imprint_agents_agent_id_agent_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_agents
+    ADD CONSTRAINT imprint_agents_agent_id_agent_kind_fkey FOREIGN KEY (agent_id, agent_kind) REFERENCES public.res(id, kind) ON DELETE RESTRICT;
+
+
+--
+-- Name: imprint_agents imprint_agents_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_agents
+    ADD CONSTRAINT imprint_agents_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: imprint_agents imprint_agents_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_agents
+    ADD CONSTRAINT imprint_agents_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: imprint_agents imprint_agents_imprint_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_agents
+    ADD CONSTRAINT imprint_agents_imprint_id_fkey FOREIGN KEY (imprint_id) REFERENCES public.imprints(id) ON DELETE CASCADE;
+
+
+--
+-- Name: imprint_places imprint_places_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_places
+    ADD CONSTRAINT imprint_places_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: imprint_places imprint_places_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_places
+    ADD CONSTRAINT imprint_places_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: imprint_places imprint_places_imprint_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_places
+    ADD CONSTRAINT imprint_places_imprint_id_fkey FOREIGN KEY (imprint_id) REFERENCES public.imprints(id) ON DELETE CASCADE;
+
+
+--
+-- Name: imprint_places imprint_places_place_id_place_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_places
+    ADD CONSTRAINT imprint_places_place_id_place_kind_fkey FOREIGN KEY (place_id, place_kind) REFERENCES public.res(id, kind) ON DELETE RESTRICT;
+
+
+--
+-- Name: imprints imprints_conversion_scheme_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_conversion_scheme_fkey FOREIGN KEY (conversion_scheme) REFERENCES public.conversion_schemes(code);
+
+
+--
+-- Name: imprints imprints_date_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_date_basis_fkey FOREIGN KEY (date_basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: imprints imprints_date_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_date_certainty_fkey FOREIGN KEY (date_certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: imprints imprints_derived_from_manifestation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_derived_from_manifestation_id_fkey FOREIGN KEY (derived_from, manifestation_id) REFERENCES public.imprints(id, manifestation_id) ON DELETE CASCADE;
+
+
+--
+-- Name: imprints imprints_function_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_function_fkey FOREIGN KEY (function) REFERENCES public.imprint_functions(code);
+
+
+--
+-- Name: imprints imprints_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: imprints imprints_manifestation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_manifestation_id_fkey FOREIGN KEY (manifestation_id) REFERENCES public.manifestations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: imprints imprints_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprints
+    ADD CONSTRAINT imprints_script_fkey FOREIGN KEY (script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: items items_holder_id_holder_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.items
+    ADD CONSTRAINT items_holder_id_holder_kind_fkey FOREIGN KEY (holder_id, holder_kind) REFERENCES public.res(id, kind) ON DELETE RESTRICT;
+
+
+--
+-- Name: items items_id_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.items
+    ADD CONSTRAINT items_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: items items_manifestation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.items
+    ADD CONSTRAINT items_manifestation_id_fkey FOREIGN KEY (manifestation_id) REFERENCES public.manifestations(id) ON DELETE RESTRICT;
 
 
 --
@@ -990,6 +1751,110 @@ ALTER TABLE ONLY public.legacy_works
 
 
 --
+-- Name: manifestation_expressions manifestation_expressions_expression_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_expressions
+    ADD CONSTRAINT manifestation_expressions_expression_id_fkey FOREIGN KEY (expression_id) REFERENCES public.expressions(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: manifestation_expressions manifestation_expressions_manifestation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_expressions
+    ADD CONSTRAINT manifestation_expressions_manifestation_id_fkey FOREIGN KEY (manifestation_id) REFERENCES public.manifestations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: manifestation_statements manifestation_statements_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_conversion_scheme_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_conversion_scheme_fkey FOREIGN KEY (conversion_scheme) REFERENCES public.conversion_schemes(code);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_derived_from_manifestation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_derived_from_manifestation_id_fkey FOREIGN KEY (derived_from, manifestation_id) REFERENCES public.manifestation_statements(id, manifestation_id) ON DELETE CASCADE;
+
+
+--
+-- Name: manifestation_statements manifestation_statements_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_manifestation_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_manifestation_id_fkey FOREIGN KEY (manifestation_id) REFERENCES public.manifestations(id) ON DELETE CASCADE;
+
+
+--
+-- Name: manifestation_statements manifestation_statements_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_script_fkey FOREIGN KEY (script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_source_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_source_fkey FOREIGN KEY (source) REFERENCES public.sources(code);
+
+
+--
+-- Name: manifestation_statements manifestation_statements_statement_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_statements
+    ADD CONSTRAINT manifestation_statements_statement_type_fkey FOREIGN KEY (statement_type) REFERENCES public.statement_types(code);
+
+
+--
+-- Name: manifestations manifestations_category_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestations
+    ADD CONSTRAINT manifestations_category_fkey FOREIGN KEY (category) REFERENCES public.manifestation_categories(code);
+
+
+--
+-- Name: manifestations manifestations_id_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestations
+    ADD CONSTRAINT manifestations_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
 -- Name: relation_types relation_types_domain_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1014,11 +1879,107 @@ ALTER TABLE ONLY public.relation_types
 
 
 --
+-- Name: res res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.res
+    ADD CONSTRAINT res_kind_fkey FOREIGN KEY (kind) REFERENCES public.res_kinds(code);
+
+
+--
 -- Name: roles roles_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.roles
     ADD CONSTRAINT roles_res_kind_fkey FOREIGN KEY (res_kind) REFERENCES public.res_kinds(code);
+
+
+--
+-- Name: titles titles_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: titles titles_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: titles titles_conversion_scheme_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_conversion_scheme_fkey FOREIGN KEY (conversion_scheme) REFERENCES public.conversion_schemes(code);
+
+
+--
+-- Name: titles titles_derived_from_res_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_derived_from_res_id_fkey FOREIGN KEY (derived_from, res_id) REFERENCES public.titles(id, res_id) ON DELETE CASCADE;
+
+
+--
+-- Name: titles titles_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: titles titles_res_id_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: titles titles_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_script_fkey FOREIGN KEY (script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: titles titles_source_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_source_fkey FOREIGN KEY (source) REFERENCES public.sources(code);
+
+
+--
+-- Name: titles titles_title_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.titles
+    ADD CONSTRAINT titles_title_type_fkey FOREIGN KEY (title_type) REFERENCES public.title_types(code);
+
+
+--
+-- Name: works works_category_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.works
+    ADD CONSTRAINT works_category_fkey FOREIGN KEY (category) REFERENCES public.work_categories(code);
+
+
+--
+-- Name: works works_id_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.works
+    ADD CONSTRAINT works_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
 
 
 --
