@@ -1,0 +1,6 @@
+%syntax-version=1.0.0
+%project=libroyal
+
+baseline 2026-10-21T20:00:36Z Lev Z. Király <lev.z.kiraly@gmail.com> # Baseline: existing libroyal tables, sequences, constraints, indexes (pre-Sqitch state, 2026-10-21)
+lo_bibliography [baseline] 2026-10-21T20:00:36Z Lev Z. Király <lev.z.kiraly@gmail.com> # LibreOffice bibliography view (contract read by libroyal.odb)
+@baseline 2026-10-21T20:00:37Z Lev Z. Király <lev.z.kiraly@gmail.com> # Pre-Sqitch libroyal structure

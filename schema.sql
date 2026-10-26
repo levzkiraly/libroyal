@@ -1,0 +1,597 @@
+--
+-- PostgreSQL database dump
+--
+
+
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: persons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.persons (
+    id bigint NOT NULL,
+    family_name text NOT NULL,
+    given_name text,
+    prefix text,
+    suffix text
+);
+
+
+--
+-- Name: series; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.series (
+    id bigint NOT NULL,
+    name character varying(255) NOT NULL,
+    issn character varying(9)
+);
+
+
+--
+-- Name: tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.tags (
+    id bigint NOT NULL,
+    name text NOT NULL
+);
+
+
+--
+-- Name: work_contributors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.work_contributors (
+    work_id bigint NOT NULL,
+    person_id bigint NOT NULL,
+    role text NOT NULL,
+    "position" integer NOT NULL,
+    CONSTRAINT work_contributors_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: work_copies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.work_copies (
+    id bigint NOT NULL,
+    work_id bigint NOT NULL,
+    location_type character varying(12) NOT NULL,
+    mime_type character varying(255) NOT NULL,
+    url text NOT NULL
+);
+
+
+--
+-- Name: work_tags; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.work_tags (
+    work_id bigint NOT NULL,
+    tag_id bigint NOT NULL
+);
+
+
+--
+-- Name: works; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.works (
+    id bigint NOT NULL,
+    type text NOT NULL,
+    title text NOT NULL,
+    subtitle text,
+    year text,
+    publisher text,
+    place text,
+    journal text,
+    volume text,
+    issue text,
+    pages text,
+    doi text,
+    isbn text,
+    url text,
+    note text,
+    series_id bigint,
+    number character varying(12),
+    booktitle text,
+    edition text,
+    CONSTRAINT works_type_lo_check CHECK ((type = ANY (ARRAY['article'::text, 'book'::text, 'booklet'::text, 'conference'::text, 'inbook'::text, 'incollection'::text, 'inproceedings'::text, 'journal'::text, 'manual'::text, 'mastersthesis'::text, 'misc'::text, 'phdthesis'::text, 'proceedings'::text, 'techreport'::text, 'unpublished'::text, 'email'::text, 'www'::text, 'custom1'::text, 'custom2'::text, 'custom3'::text, 'custom4'::text, 'custom5'::text])))
+);
+
+
+--
+-- Name: lo_bibliography; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.lo_bibliography AS
+ WITH author_names AS (
+         SELECT wc.work_id,
+            string_agg(p.family_name, '–'::text ORDER BY wc."position") AS author_family_names,
+            string_agg(
+                CASE
+                    WHEN ((p.given_name IS NULL) OR (p.given_name = ''::text)) THEN p.family_name
+                    ELSE ((p.family_name || ', '::text) || p.given_name)
+                END, '; '::text ORDER BY wc."position") AS author_full_names
+           FROM (public.work_contributors wc
+             JOIN public.persons p ON ((p.id = wc.person_id)))
+          WHERE (wc.role = 'author'::text)
+          GROUP BY wc.work_id
+        ), editor_names AS (
+         SELECT wc.work_id,
+            string_agg(p.family_name, '–'::text ORDER BY wc."position") AS editor_family_names,
+            string_agg(
+                CASE
+                    WHEN ((p.given_name IS NULL) OR (p.given_name = ''::text)) THEN p.family_name
+                    ELSE ((p.family_name || ', '::text) || p.given_name)
+                END, '; '::text ORDER BY wc."position") AS editor_full_names
+           FROM (public.work_contributors wc
+             JOIN public.persons p ON ((p.id = wc.person_id)))
+          WHERE (wc.role = 'editor'::text)
+          GROUP BY wc.work_id
+        ), translator_names AS (
+         SELECT wc.work_id,
+            string_agg(
+                CASE
+                    WHEN ((p.given_name IS NULL) OR (p.given_name = ''::text)) THEN p.family_name
+                    ELSE ((p.family_name || ', '::text) || p.given_name)
+                END, '; '::text ORDER BY wc."position") AS translator_full_names
+           FROM (public.work_contributors wc
+             JOIN public.persons p ON ((p.id = wc.person_id)))
+          WHERE (wc.role = 'translator'::text)
+          GROUP BY wc.work_id
+        ), tag_names AS (
+         SELECT wt.work_id,
+            string_agg(t.name, '; '::text ORDER BY t.name) AS tag_list
+           FROM (public.work_tags wt
+             JOIN public.tags t ON ((t.id = wt.tag_id)))
+          GROUP BY wt.work_id
+        ), local_copies AS (
+         SELECT DISTINCT ON (wc.work_id) wc.work_id,
+            wc.url
+           FROM public.work_copies wc
+          WHERE ((wc.location_type)::text = 'local'::text)
+          ORDER BY wc.work_id, wc.id DESC
+        ), base AS (
+         SELECT w.id,
+            TRIM(BOTH ' '::text FROM ((COALESCE(NULLIF(an.author_family_names, ''::text), NULLIF(en.editor_family_names, ''::text), '[no-author]'::text) || ' '::text) || COALESCE(NULLIF(w.year, ''::text), '[no-year]'::text))) AS citekey0,
+            w.type,
+            an.author_full_names AS authors,
+            en.editor_full_names AS editors,
+            tr.translator_full_names AS translators,
+                CASE
+                    WHEN (NULLIF(btrim(w.subtitle), ''::text) IS NOT NULL) THEN ((w.title || ': '::text) || w.subtitle)
+                    ELSE w.title
+                END AS title,
+            w.subtitle,
+            w.year,
+            w.publisher,
+            w.place,
+            w.journal,
+            w.volume,
+            w.issue,
+            w.pages,
+            w.doi,
+            w.isbn,
+            w.url,
+            w.note,
+            w.booktitle,
+            w.edition,
+            tg.tag_list AS tags,
+            s.name AS series_name,
+            w.number AS series_number,
+            lc.url AS local_url
+           FROM ((((((public.works w
+             LEFT JOIN author_names an ON ((an.work_id = w.id)))
+             LEFT JOIN editor_names en ON ((en.work_id = w.id)))
+             LEFT JOIN translator_names tr ON ((tr.work_id = w.id)))
+             LEFT JOIN tag_names tg ON ((tg.work_id = w.id)))
+             LEFT JOIN public.series s ON ((s.id = w.series_id)))
+             LEFT JOIN local_copies lc ON ((lc.work_id = w.id)))
+        ), keyed AS (
+         SELECT base.id,
+            base.citekey0,
+            base.type,
+            base.authors,
+            base.editors,
+            base.translators,
+            base.title,
+            base.subtitle,
+            base.year,
+            base.publisher,
+            base.place,
+            base.journal,
+            base.volume,
+            base.issue,
+            base.pages,
+            base.doi,
+            base.isbn,
+            base.url,
+            base.note,
+            base.booktitle,
+            base.edition,
+            base.tags,
+            base.series_name,
+            base.series_number,
+            base.local_url,
+            (base.citekey0 ||
+                CASE
+                    WHEN (count(*) OVER (PARTITION BY base.citekey0) > 1) THEN chr((96 + (row_number() OVER (PARTITION BY base.citekey0 ORDER BY (base.title COLLATE "und-x-icu"), base.id))::integer))
+                    ELSE ''::text
+                END) AS citekey
+           FROM base
+        )
+ SELECT citekey AS "Identifier",
+        CASE type
+            WHEN 'article'::text THEN 0
+            WHEN 'book'::text THEN 1
+            WHEN 'booklet'::text THEN 2
+            WHEN 'conference'::text THEN 3
+            WHEN 'inbook'::text THEN 4
+            WHEN 'incollection'::text THEN 5
+            WHEN 'inproceedings'::text THEN 6
+            WHEN 'journal'::text THEN 7
+            WHEN 'manual'::text THEN 8
+            WHEN 'mastersthesis'::text THEN 9
+            WHEN 'misc'::text THEN 10
+            WHEN 'phdthesis'::text THEN 11
+            WHEN 'proceedings'::text THEN 12
+            WHEN 'techreport'::text THEN 13
+            WHEN 'unpublished'::text THEN 14
+            WHEN 'email'::text THEN 15
+            WHEN 'www'::text THEN 16
+            WHEN 'custom1'::text THEN 17
+            WHEN 'custom2'::text THEN 18
+            WHEN 'custom3'::text THEN 19
+            WHEN 'custom4'::text THEN 20
+            WHEN 'custom5'::text THEN 21
+            ELSE NULL::integer
+        END AS "BibliographyType",
+    authors AS "Author",
+    editors AS "Editor",
+    title AS "Title",
+    subtitle AS "Subtitle",
+    year AS "Year",
+    publisher AS "Publisher",
+    place AS "Address",
+    journal AS "Journal",
+    volume AS "Volume",
+    COALESCE(issue, (series_number)::text) AS "Number",
+    pages AS "Pages",
+    isbn AS "ISBN",
+    url AS "URL",
+    doi AS "Custom1",
+    translators AS "Custom2",
+    tags AS "Custom3",
+    note AS "Note",
+    NULL::text AS "Annote",
+    booktitle AS "Booktitle",
+    NULL::text AS "Chapter",
+    edition AS "Edition",
+    NULL::text AS "Howpublished",
+    NULL::text AS "Institution",
+    NULL::text AS "Month",
+    NULL::text AS "Organizations",
+    NULL::text AS "School",
+    series_name AS "Series",
+    NULL::text AS "ReportType",
+    NULL::text AS "Custom4",
+    NULL::text AS "Custom5",
+    local_url AS "LocalURL"
+   FROM keyed;
+
+
+--
+-- Name: persons_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.persons_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: persons_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.persons_id_seq OWNED BY public.persons.id;
+
+
+--
+-- Name: series_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.series_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: series_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.series_id_seq OWNED BY public.series.id;
+
+
+--
+-- Name: tags_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.tags_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: tags_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.tags_id_seq OWNED BY public.tags.id;
+
+
+--
+-- Name: work_copies_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.work_copies_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: work_copies_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.work_copies_id_seq OWNED BY public.work_copies.id;
+
+
+--
+-- Name: works_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.works_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: works_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.works_id_seq OWNED BY public.works.id;
+
+
+--
+-- Name: persons id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.persons ALTER COLUMN id SET DEFAULT nextval('public.persons_id_seq'::regclass);
+
+
+--
+-- Name: series id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.series ALTER COLUMN id SET DEFAULT nextval('public.series_id_seq'::regclass);
+
+
+--
+-- Name: tags id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tags ALTER COLUMN id SET DEFAULT nextval('public.tags_id_seq'::regclass);
+
+
+--
+-- Name: work_copies id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_copies ALTER COLUMN id SET DEFAULT nextval('public.work_copies_id_seq'::regclass);
+
+
+--
+-- Name: works id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.works ALTER COLUMN id SET DEFAULT nextval('public.works_id_seq'::regclass);
+
+
+--
+-- Name: persons persons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.persons
+    ADD CONSTRAINT persons_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: series series_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.series
+    ADD CONSTRAINT series_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tags tags_name_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tags
+    ADD CONSTRAINT tags_name_key UNIQUE (name);
+
+
+--
+-- Name: tags tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.tags
+    ADD CONSTRAINT tags_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: work_contributors work_contributors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_contributors
+    ADD CONSTRAINT work_contributors_pkey PRIMARY KEY (work_id, person_id, role);
+
+
+--
+-- Name: work_contributors work_contributors_unique_position; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_contributors
+    ADD CONSTRAINT work_contributors_unique_position UNIQUE (work_id, role, "position");
+
+
+--
+-- Name: work_copies work_copies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_copies
+    ADD CONSTRAINT work_copies_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: work_tags work_tags_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_tags
+    ADD CONSTRAINT work_tags_pkey PRIMARY KEY (work_id, tag_id);
+
+
+--
+-- Name: works works_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.works
+    ADD CONSTRAINT works_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: idx_persons_family_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_persons_family_name ON public.persons USING btree (family_name);
+
+
+--
+-- Name: idx_tags_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_tags_name ON public.tags USING btree (name);
+
+
+--
+-- Name: idx_work_contributors_person; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_work_contributors_person ON public.work_contributors USING btree (person_id);
+
+
+--
+-- Name: idx_work_contributors_work_role; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_work_contributors_work_role ON public.work_contributors USING btree (work_id, role);
+
+
+--
+-- Name: idx_works_type; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_works_type ON public.works USING btree (type);
+
+
+--
+-- Name: idx_works_year; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_works_year ON public.works USING btree (year);
+
+
+--
+-- Name: work_contributors work_contributors_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_contributors
+    ADD CONSTRAINT work_contributors_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.persons(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: work_contributors work_contributors_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_contributors
+    ADD CONSTRAINT work_contributors_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
+
+
+--
+-- Name: work_copies work_copies_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_copies
+    ADD CONSTRAINT work_copies_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
+
+
+--
+-- Name: work_tags work_tags_tag_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_tags
+    ADD CONSTRAINT work_tags_tag_id_fkey FOREIGN KEY (tag_id) REFERENCES public.tags(id) ON DELETE CASCADE;
+
+
+--
+-- Name: work_tags work_tags_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_tags
+    ADD CONSTRAINT work_tags_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
+
+
+--
+-- Name: works works_series_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.works
+    ADD CONSTRAINT works_series_id_fkey FOREIGN KEY (series_id) REFERENCES public.series(id) ON DELETE SET NULL;
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+
