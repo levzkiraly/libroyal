@@ -659,9 +659,25 @@ CREATE TABLE public.identifiers (
     corrects bigint,
     basis text,
     note text,
+    checked_on_success date,
+    checked_on_error date,
     CONSTRAINT identifiers_assigned_by_kind_check CHECK ((assigned_by_kind = 'agent'::text)),
     CONSTRAINT identifiers_check CHECK ((corrects <> id))
 );
+
+
+--
+-- Name: COLUMN identifiers.checked_on_success; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.identifiers.checked_on_success IS 'last date the identifier or its permalink was successfully checked against the issuing service';
+
+
+--
+-- Name: COLUMN identifiers.checked_on_error; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.identifiers.checked_on_error IS 'last date a check failed (not cleared by a later success: both dates are kept)';
 
 
 --

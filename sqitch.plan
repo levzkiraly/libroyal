@@ -12,3 +12,4 @@ agents [wemi_core] 2026-10-26T02:22:54Z Lev Z. Király <lev.z.kiraly@gmail.com> 
 places [agents] 2026-10-26T02:22:54Z Lev Z. Király <lev.z.kiraly@gmail.com> # Places (LRM-E10) with time-bound names in any language and script
 name_rendering [agents] 2026-10-26T02:22:54Z Lev Z. Király <lev.z.kiraly@gmail.com> # Heading, display and sort-key rendering of personal names (KSZ4 structure; locale placement rules)
 wemi_links [agents] 2026-10-26T10:15:53Z Lev Z. Király <lev.z.kiraly@gmail.com> # Relations, contributions, statement agents (name forms printed on manifestations), identifiers with normalization, status and checksums
+catalogue_links [wemi_links] 2026-10-26T17:04:38Z Lev Z. Király <lev.z.kiraly@gmail.com> # Catalogue record identifiers (LCCN, DNB, Arcanum; OSZK NEKTÁR and MOKKA-ODR permalinks) and link-check dates on identifiers
