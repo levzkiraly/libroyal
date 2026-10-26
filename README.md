@@ -62,3 +62,34 @@ set either at the point of use from your secret store, e.g.
 `sqitch rework lo_bibliography`, which keeps the previous version under the
 last tag and lets the view's history read as a sequence of `CREATE OR REPLACE`
 edits. This requires a tag after the last deployment of the view.
+
+## Catalogue validation
+
+`tools/catalogue/catalogue.py` looks entries up in reference catalogues and writes
+a field-by-field comparison report; it never changes the database.
+
+| source | access | format |
+|---|---|---|
+| `oszk` | OSZK NEKTÁR, Z39.50 `tagetes2.oszk.hu:1616/ANY` | HUNMARC |
+| `mokka` | MOKKA, Z39.50 `z3950.mokka.hu:2210` | MARC21 export |
+| `loc` | Library of Congress, SRU `lx2.loc.gov:210/LCDB` | MARC21 |
+| `dnb` | Deutsche Nationalbibliothek, SRU `services.dnb.de/sru/dnb` (paced; answers 429 when too fast) | MARC21 |
+| `doi` | doi.org content negotiation (Crossref, DataCite) | CSL-JSON |
+| `arcanum` | Arcanum ADT public search, no account; only with `--arcanum`, one request per entry, 10 s apart | citation line, docId, page |
+
+Requires `yaz` (`zoomsh`) for Z39.50; otherwise only the Python standard library.
+Searches go by identifier first (DOI, ISBN); on no hit, by title + author, then title +
+year (part records of multi-part works often lack the author). Leading articles are
+dropped from title searches, as the catalogues' title indexes ignore them. Journals and
+series are looked up as serials for their ISSN. A part record reachable only through
+its set record (e.g. OSZK) still has to be found by hand.
+
+```bash
+PGPASSWORD=… tools/catalogue/catalogue.py legacy [--id N …]   # reports in validation/
+tools/catalogue/catalogue.py lookup --isbn 9789639971677 --source oszk mokka
+tools/catalogue/catalogue.py legacy --id 24 --arcanum                # include Arcanum
+```
+
+Reports (`validation/<id>.md`, `validation/index.md`) and the raw records
+(`validation/raw/`) are evidence for decisions, not data; `validation/` is not
+tracked by git.

@@ -4,3 +4,8 @@
 *.sql.gz
 .backup/
 regulations/
+# Catalogue validation reports and raw records (evidence, regenerable)
+validation/
+
+# Python bytecode
+__pycache__/
