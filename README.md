@@ -28,6 +28,9 @@ in database backups, never here.
 | `legacy_rename` | Old tables (and their constraints, indexes, sequences) renamed to `legacy_*`; `lo_bibliography` keeps reading them |
 | `vocabularies` | Controlled vocabularies with seed rows: res kinds, languages, scripts, conversion schemes (ALA-LC), categories, relation types (LRM R18–R29 + extensions), roles, imprint functions, identifier schemes and statuses, title types, sources, statement types, place-name types, basis, certainty |
 | `wemi_core` | `res` supertable; works, expressions, manifestations, items; titles, manifestation statements, imprints (with places and agents); QA views |
+| `agents` | Agents (ágens): persons (személy) and collective agents (kollektív ágens); structured personal names (MOKKA KSZ4), collective names; name types, name cultures, the KSZ4 2.1.2.3 particle table, generational markers |
+| `places` | Places with time-bound names in any language and script |
+| `name_rendering` | KSZ4 heading, natural display form per output language and Hungarian-collated sort columns of personal names (`person_names_rendered`); particle QA view |
 
 A second target, `dev` (`libroyal_dev`), is configured for trying changes before they
 reach the live database: `sqitch deploy --verify dev`.

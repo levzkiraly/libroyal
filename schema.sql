@@ -15,6 +15,86 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: person_names; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.person_names (
+    id bigint NOT NULL,
+    person_id bigint NOT NULL,
+    name_type text DEFAULT 'preferred'::text NOT NULL,
+    entry text DEFAULT 'family'::text NOT NULL,
+    name_order text DEFAULT 'given_first'::text NOT NULL,
+    culture text,
+    family_name text,
+    given_name text,
+    patronymic text,
+    particle text,
+    particle_in_entry boolean,
+    particle_joined boolean,
+    predicate text,
+    epithet text,
+    noble_title text,
+    numeral integer,
+    generational text,
+    generational_ordinal integer,
+    qualifier text,
+    heading_override text,
+    display_override text,
+    sort_override text,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT person_names_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT person_names_check1 CHECK (((family_name IS NOT NULL) OR (given_name IS NOT NULL) OR (heading_override IS NOT NULL))),
+    CONSTRAINT person_names_check2 CHECK (((entry = 'given'::text) OR (family_name IS NOT NULL) OR (heading_override IS NOT NULL))),
+    CONSTRAINT person_names_check3 CHECK (((generational = 'ordinal'::text) = (generational_ordinal IS NOT NULL))),
+    CONSTRAINT person_names_entry_check CHECK ((entry = ANY (ARRAY['family'::text, 'given'::text]))),
+    CONSTRAINT person_names_generational_ordinal_check CHECK ((generational_ordinal > 1)),
+    CONSTRAINT person_names_name_order_check CHECK ((name_order = ANY (ARRAY['family_first'::text, 'given_first'::text]))),
+    CONSTRAINT person_names_numeral_check CHECK ((numeral > 0))
+);
+
+
+--
+-- Name: generational_label(public.person_names, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.generational_label(n public.person_names, p_lang text) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT CASE WHEN n.generational = 'ordinal' THEN to_char(n.generational_ordinal, 'FMRN')
+        ELSE coalesce(
+            (SELECT label FROM public.generational_labels WHERE code = n.generational AND lang = p_lang),
+            (SELECT label FROM public.generational_labels WHERE code = n.generational AND lang = n.lang),
+            (SELECT label FROM public.generational_labels WHERE code = n.generational AND lang = 'en'))
+        END
+$$;
+
+
+--
+-- Name: new_agent(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.new_agent(p_type text) RETURNS bigint
+    LANGUAGE plpgsql
+    AS $$
+DECLARE v_id bigint;
+BEGIN
+    INSERT INTO public.res (kind) VALUES ('agent') RETURNING id INTO v_id;
+    INSERT INTO public.agents (id, agent_type) VALUES (v_id, p_type);
+    RETURN v_id;
+END $$;
+
+
 --
 -- Name: new_res(text); Type: FUNCTION; Schema: public; Owner: -
 --
@@ -22,6 +102,174 @@ SET row_security = off;
 CREATE FUNCTION public.new_res(p_kind text) RETURNS bigint
     LANGUAGE sql
     AS $$ INSERT INTO public.res (kind) VALUES (p_kind) RETURNING id $$;
+
+
+--
+-- Name: normalize_particle(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.normalize_particle(p text) RETURNS text
+    LANGUAGE sql IMMUTABLE
+    AS $$ SELECT lower(replace(btrim(p), '’', '''')) $$;
+
+
+--
+-- Name: particle_in_entry(public.person_names); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.particle_in_entry(n public.person_names) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$ SELECT coalesce(n.particle_in_entry, public.particle_rule(n.particle, n.culture)) $$;
+
+
+--
+-- Name: particle_joiner(text, boolean); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.particle_joiner(p_particle text, p_joined boolean) RETURNS text
+    LANGUAGE sql IMMUTABLE
+    AS $$
+    SELECT CASE
+        WHEN coalesce(p_joined, public.normalize_particle(p_particle) LIKE '%''') THEN ''
+        ELSE ' ' END
+$$;
+
+
+--
+-- Name: particle_rule(text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.particle_rule(p_particle text, p_culture text) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT coalesce(
+        (SELECT in_entry FROM public.particle_rules
+          WHERE particle = public.normalize_particle(p_particle) AND culture = p_culture),
+        (SELECT in_entry FROM public.particle_rules
+          WHERE particle = split_part(public.normalize_particle(p_particle), ' ', 1) AND culture = p_culture),
+        (SELECT particles_in_entry FROM public.name_cultures WHERE code = p_culture))
+$$;
+
+
+--
+-- Name: person_name_display(public.person_names, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.person_name_display(n public.person_names, p_locale text) RETURNS text
+    LANGUAGE plpgsql STABLE
+    AS $$
+DECLARE
+    pl     record;
+    pre    text[] := '{}';
+    post   text[] := '{}';
+    core   text;
+    fam    text;
+    gen    text := public.generational_label(n, p_locale);
+    num    text := to_char(n.numeral, 'FMRN');
+BEGIN
+    IF n.display_override IS NOT NULL THEN
+        RETURN n.display_override;
+    END IF;
+    IF n.family_name IS NULL AND n.given_name IS NULL THEN
+        RETURN n.heading_override;
+    END IF;
+    SELECT
+        coalesce((SELECT position FROM public.name_element_placements WHERE locale = p_locale AND element = 'numeral'),      'after') AS numeral,
+        coalesce((SELECT position FROM public.name_element_placements WHERE locale = p_locale AND element = 'generational'), 'after') AS generational,
+        coalesce((SELECT position FROM public.name_element_placements WHERE locale = p_locale AND element = 'epithet'),      'after') AS epithet,
+        coalesce((SELECT position FROM public.name_element_placements WHERE locale = p_locale AND element = 'predicate'),    'before') AS predicate
+      INTO pl;
+
+    IF gen IS NOT NULL THEN
+        IF pl.generational = 'before' THEN pre := pre || gen; ELSE post := post || gen; END IF;
+    END IF;
+    IF num IS NOT NULL THEN
+        IF pl.numeral = 'before' THEN pre := pre || (num || '.'); ELSE post := post || num; END IF;
+    END IF;
+    IF n.predicate IS NOT NULL THEN
+        IF pl.predicate = 'before' THEN pre := pre || n.predicate; ELSE post := post || n.predicate; END IF;
+    END IF;
+    IF n.epithet IS NOT NULL THEN
+        IF pl.epithet = 'before' THEN pre := pre || n.epithet; ELSE post := post || n.epithet; END IF;
+    END IF;
+
+    fam := CASE WHEN n.particle IS NOT NULL
+                THEN n.particle || public.particle_joiner(n.particle, n.particle_joined) || n.family_name
+                ELSE n.family_name END;
+    IF n.name_order = 'family_first' AND p_locale = 'hu' THEN
+        core := concat_ws(' ', fam, n.given_name, n.patronymic);
+    ELSE
+        core := concat_ws(' ', n.given_name, n.patronymic, fam);
+    END IF;
+
+    RETURN concat_ws(' ', nullif(array_to_string(pre, ' '), ''), core, nullif(array_to_string(post, ' '), ''))
+        || coalesce(', ' || n.noble_title, '');
+END $$;
+
+
+--
+-- Name: person_name_entry(public.person_names); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.person_name_entry(n public.person_names) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT CASE
+        WHEN n.entry = 'given' THEN n.given_name
+        WHEN n.particle IS NOT NULL AND public.particle_in_entry(n) IS TRUE
+            THEN n.particle || public.particle_joiner(n.particle, n.particle_joined) || n.family_name
+        ELSE n.family_name END
+$$;
+
+
+--
+-- Name: person_name_heading(public.person_names); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.person_name_heading(n public.person_names) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT coalesce(n.heading_override,
+        public.person_name_entry(n)
+        || coalesce(CASE WHEN n.name_order = 'family_first' THEN ' ' ELSE ', ' END || public.person_name_rest(n), '')
+        || coalesce(' (' || n.qualifier || ')', '')
+        || coalesce(', ' || to_char(n.numeral, 'FMRN') || '.', '')
+        || coalesce(', ' || n.epithet, '')
+        || coalesce(', ' || n.predicate, '')
+        || coalesce(', ' || n.noble_title, '')
+        || coalesce(' (' || public.generational_label(n, coalesce(n.lang, 'hu')) || ')', ''))
+$$;
+
+
+--
+-- Name: person_name_heading_full(public.person_names); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.person_name_heading_full(n public.person_names) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT public.person_name_heading(n) || coalesce(' (' || (
+        SELECT CASE
+            WHEN p.birth_text IS NOT NULL OR p.death_text IS NOT NULL
+                THEN coalesce(p.birth_text, '') || '-' || coalesce(p.death_text, '')
+            ELSE p.floruit_text END
+          FROM public.persons p WHERE p.id = n.person_id) || ')', '')
+$$;
+
+
+--
+-- Name: person_name_rest(public.person_names); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.person_name_rest(n public.person_names) RETURNS text
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT nullif(concat_ws(' ',
+        CASE WHEN n.entry = 'family' THEN n.given_name END,
+        n.patronymic,
+        CASE WHEN n.entry = 'family' AND n.particle IS NOT NULL
+              AND public.particle_in_entry(n) IS NOT TRUE THEN n.particle END), '')
+$$;
 
 
 --
@@ -37,9 +285,30 @@ BEGIN
 END $$;
 
 
-SET default_tablespace = '';
+--
+-- Name: agent_types; Type: TABLE; Schema: public; Owner: -
+--
 
-SET default_table_access_method = heap;
+CREATE TABLE public.agent_types (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    lrm_id text
+);
+
+
+--
+-- Name: agents; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agents (
+    id bigint NOT NULL,
+    kind text DEFAULT 'agent'::text NOT NULL,
+    agent_type text NOT NULL,
+    note text,
+    CONSTRAINT agents_kind_check CHECK ((kind = 'agent'::text))
+);
+
 
 --
 -- Name: bases; Type: TABLE; Schema: public; Owner: -
@@ -63,6 +332,108 @@ CREATE TABLE public.certainties (
     label_hu text,
     isbd_mark text
 );
+
+
+--
+-- Name: collective_categories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.collective_categories (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text
+);
+
+
+--
+-- Name: collective_name_attestations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.collective_name_attestations (
+    id bigint NOT NULL,
+    name_id bigint NOT NULL,
+    res_id bigint,
+    source_text text,
+    locator text,
+    note text,
+    CONSTRAINT collective_name_attestations_check CHECK (((res_id IS NOT NULL) OR (source_text IS NOT NULL)))
+);
+
+
+--
+-- Name: collective_name_attestations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.collective_name_attestations ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.collective_name_attestations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: collective_names; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.collective_names (
+    id bigint NOT NULL,
+    collective_id bigint NOT NULL,
+    name_type text DEFAULT 'preferred'::text NOT NULL,
+    value text NOT NULL,
+    valid_from_year integer,
+    valid_to_year integer,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT collective_names_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT collective_names_check1 CHECK ((valid_to_year >= valid_from_year))
+);
+
+
+--
+-- Name: collective_names_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.collective_names ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.collective_names_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: collectives; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.collectives (
+    id bigint DEFAULT public.new_agent('collective'::text) NOT NULL,
+    agent_type text DEFAULT 'collective'::text NOT NULL,
+    category text NOT NULL,
+    parent_id bigint,
+    start_text text,
+    start_year integer,
+    end_text text,
+    end_year integer,
+    note text,
+    CONSTRAINT collectives_agent_type_check CHECK ((agent_type = 'collective'::text))
+);
+
+
+--
+-- Name: COLUMN collectives.parent_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.collectives.parent_id IS 'LRM-R31: the larger collective this one is part of';
 
 
 --
@@ -112,6 +483,27 @@ COMMENT ON COLUMN public.expressions.work_id IS 'LRM-R2: the one work this expre
 
 
 --
+-- Name: generational_labels; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generational_labels (
+    code text NOT NULL,
+    lang text NOT NULL,
+    label text NOT NULL
+);
+
+
+--
+-- Name: generational_markers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generational_markers (
+    code text NOT NULL,
+    label_en text NOT NULL
+);
+
+
+--
 -- Name: identifier_schemes; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -149,8 +541,11 @@ CREATE TABLE public.imprint_agents (
     basis text DEFAULT 'transcribed'::text NOT NULL,
     certainty text DEFAULT 'certain'::text NOT NULL,
     note text,
+    person_name_id bigint,
+    collective_name_id bigint,
     CONSTRAINT imprint_agents_agent_kind_check CHECK ((agent_kind = 'agent'::text)),
     CONSTRAINT imprint_agents_check CHECK (((agent_id IS NOT NULL) OR (as_printed IS NOT NULL))),
+    CONSTRAINT imprint_agents_check1 CHECK ((num_nonnulls(person_name_id, collective_name_id) <= 1)),
     CONSTRAINT imprint_agents_position_check CHECK (("position" > 0))
 );
 
@@ -736,6 +1131,166 @@ CREATE TABLE public.manifestations (
 
 
 --
+-- Name: name_cultures; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.name_cultures (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    kind text NOT NULL,
+    particles_in_entry boolean,
+    note text,
+    CONSTRAINT name_cultures_kind_check CHECK ((kind = ANY (ARRAY['nation'::text, 'language_area'::text])))
+);
+
+
+--
+-- Name: name_element_placements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.name_element_placements (
+    locale text NOT NULL,
+    element text NOT NULL,
+    "position" text NOT NULL,
+    CONSTRAINT name_element_placements_element_check CHECK ((element = ANY (ARRAY['numeral'::text, 'generational'::text, 'epithet'::text, 'predicate'::text]))),
+    CONSTRAINT name_element_placements_position_check CHECK (("position" = ANY (ARRAY['before'::text, 'after'::text])))
+);
+
+
+--
+-- Name: name_types; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.name_types (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    note text
+);
+
+
+--
+-- Name: particle_rules; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.particle_rules (
+    particle text NOT NULL,
+    culture text NOT NULL,
+    in_entry boolean NOT NULL,
+    CONSTRAINT particle_rules_particle_check CHECK (((particle = lower(particle)) AND (particle !~ '’'::text)))
+);
+
+
+--
+-- Name: person_name_attestations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.person_name_attestations (
+    id bigint NOT NULL,
+    name_id bigint NOT NULL,
+    res_id bigint,
+    source_text text,
+    locator text,
+    note text,
+    CONSTRAINT person_name_attestations_check CHECK (((res_id IS NOT NULL) OR (source_text IS NOT NULL)))
+);
+
+
+--
+-- Name: person_name_attestations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.person_name_attestations ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.person_name_attestations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: person_names_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.person_names ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.person_names_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: person_names_rendered; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.person_names_rendered AS
+ SELECT id,
+    person_id,
+    name_type,
+    script,
+    public.person_name_heading(n.*) AS heading,
+    public.person_name_heading_full(n.*) AS heading_full,
+    public.person_name_display(n.*, 'hu'::text) AS display_hu,
+    public.person_name_display(n.*, 'en'::text) AS display_en,
+    (COALESCE(sort_override, public.person_name_entry(n.*)) COLLATE "hu-HU-x-icu") AS sort_entry,
+    (
+        CASE
+            WHEN (sort_override IS NULL) THEN concat_ws(' '::text, public.person_name_rest(n.*), epithet, predicate)
+            ELSE NULL::text
+        END COLLATE "hu-HU-x-icu") AS sort_rest,
+    numeral AS sort_numeral
+   FROM public.person_names n;
+
+
+--
+-- Name: persons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.persons (
+    id bigint DEFAULT public.new_agent('person'::text) NOT NULL,
+    agent_type text DEFAULT 'person'::text NOT NULL,
+    birth_text text,
+    birth_year integer,
+    death_text text,
+    death_year integer,
+    floruit_text text,
+    note text,
+    CONSTRAINT persons_agent_type_check CHECK ((agent_type = 'person'::text))
+);
+
+
+--
+-- Name: COLUMN persons.birth_text; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.persons.birth_text IS 'as to be displayed, e.g. 1824, 1824?, ca. 1500';
+
+
+--
+-- Name: COLUMN persons.floruit_text; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.persons.floruit_text IS 'period of activity when life dates are unknown, e.g. 15. sz. (KSZ4 4.2)';
+
+
+--
+-- Name: place_categories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_categories (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text
+);
+
+
+--
 -- Name: place_name_types; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -744,6 +1299,81 @@ CREATE TABLE public.place_name_types (
     label_en text NOT NULL,
     label_hu text
 );
+
+
+--
+-- Name: place_names; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_names (
+    id bigint NOT NULL,
+    place_id bigint NOT NULL,
+    name_type text DEFAULT 'official'::text NOT NULL,
+    value text NOT NULL,
+    is_preferred boolean DEFAULT false NOT NULL,
+    valid_from_year integer,
+    valid_to_year integer,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    reference_source text,
+    note text,
+    CONSTRAINT place_names_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT place_names_check1 CHECK ((valid_to_year >= valid_from_year))
+);
+
+
+--
+-- Name: place_names_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.place_names ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.place_names_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: places; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.places (
+    id bigint DEFAULT public.new_res('place'::text) NOT NULL,
+    kind text DEFAULT 'place'::text NOT NULL,
+    category text NOT NULL,
+    parent_id bigint,
+    note text,
+    CONSTRAINT places_kind_check CHECK ((kind = 'place'::text))
+);
+
+
+--
+-- Name: COLUMN places.parent_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.places.parent_id IS 'LRM-R34: the larger place this one is part of';
+
+
+--
+-- Name: qa_agents_without_preferred_name; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.qa_agents_without_preferred_name AS
+ SELECT id,
+    agent_type
+   FROM public.agents a
+  WHERE ((NOT (EXISTS ( SELECT 1
+           FROM public.person_names n
+          WHERE ((n.person_id = a.id) AND (n.name_type = 'preferred'::text))))) AND (NOT (EXISTS ( SELECT 1
+           FROM public.collective_names n
+          WHERE ((n.collective_id = a.id) AND (n.name_type = 'preferred'::text))))));
 
 
 --
@@ -818,7 +1448,27 @@ CREATE VIEW public.qa_orphan_res AS
            FROM public.manifestations x
           WHERE (x.id = r.id))))) OR ((kind = 'item'::text) AND (NOT (EXISTS ( SELECT 1
            FROM public.items x
+          WHERE (x.id = r.id))))) OR ((kind = 'agent'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM public.persons x
+          WHERE (x.id = r.id)))) AND (NOT (EXISTS ( SELECT 1
+           FROM public.collectives x
+          WHERE (x.id = r.id))))) OR ((kind = 'place'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM public.places x
           WHERE (x.id = r.id))))));
+
+
+--
+-- Name: qa_person_names_particle_undecided; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.qa_person_names_particle_undecided AS
+ SELECT id,
+    person_id,
+    family_name,
+    particle,
+    culture
+   FROM public.person_names n
+  WHERE ((particle IS NOT NULL) AND (heading_override IS NULL) AND (public.particle_in_entry(n.*) IS NULL));
 
 
 --
@@ -1017,6 +1667,30 @@ ALTER TABLE ONLY public.legacy_works ALTER COLUMN id SET DEFAULT nextval('public
 
 
 --
+-- Name: agent_types agent_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_types
+    ADD CONSTRAINT agent_types_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: agents agents_id_agent_type_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agents
+    ADD CONSTRAINT agents_id_agent_type_key UNIQUE (id, agent_type);
+
+
+--
+-- Name: agents agents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agents
+    ADD CONSTRAINT agents_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: bases bases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1033,6 +1707,46 @@ ALTER TABLE ONLY public.certainties
 
 
 --
+-- Name: collective_categories collective_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_categories
+    ADD CONSTRAINT collective_categories_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: collective_name_attestations collective_name_attestations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_name_attestations
+    ADD CONSTRAINT collective_name_attestations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: collective_names collective_names_id_collective_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_id_collective_id_key UNIQUE (id, collective_id);
+
+
+--
+-- Name: collective_names collective_names_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: collectives collectives_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collectives
+    ADD CONSTRAINT collectives_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: conversion_schemes conversion_schemes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1046,6 +1760,22 @@ ALTER TABLE ONLY public.conversion_schemes
 
 ALTER TABLE ONLY public.expressions
     ADD CONSTRAINT expressions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: generational_labels generational_labels_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generational_labels
+    ADD CONSTRAINT generational_labels_pkey PRIMARY KEY (code, lang);
+
+
+--
+-- Name: generational_markers generational_markers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generational_markers
+    ADD CONSTRAINT generational_markers_pkey PRIMARY KEY (code);
 
 
 --
@@ -1233,11 +1963,107 @@ ALTER TABLE ONLY public.manifestations
 
 
 --
+-- Name: name_cultures name_cultures_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_cultures
+    ADD CONSTRAINT name_cultures_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: name_element_placements name_element_placements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_element_placements
+    ADD CONSTRAINT name_element_placements_pkey PRIMARY KEY (locale, element);
+
+
+--
+-- Name: name_types name_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_types
+    ADD CONSTRAINT name_types_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: particle_rules particle_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.particle_rules
+    ADD CONSTRAINT particle_rules_pkey PRIMARY KEY (particle, culture);
+
+
+--
+-- Name: person_name_attestations person_name_attestations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_name_attestations
+    ADD CONSTRAINT person_name_attestations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: person_names person_names_id_person_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_id_person_id_key UNIQUE (id, person_id);
+
+
+--
+-- Name: person_names person_names_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: persons persons_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.persons
+    ADD CONSTRAINT persons_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: place_categories place_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_categories
+    ADD CONSTRAINT place_categories_pkey PRIMARY KEY (code);
+
+
+--
 -- Name: place_name_types place_name_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.place_name_types
     ADD CONSTRAINT place_name_types_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: place_names place_names_id_place_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_id_place_id_key UNIQUE (id, place_id);
+
+
+--
+-- Name: place_names place_names_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: places places_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.places
+    ADD CONSTRAINT places_pkey PRIMARY KEY (id);
 
 
 --
@@ -1361,6 +2187,27 @@ ALTER TABLE ONLY public.works
 
 
 --
+-- Name: idx_collective_name_attestations_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_collective_name_attestations_name ON public.collective_name_attestations USING btree (name_id);
+
+
+--
+-- Name: idx_collective_name_attestations_res; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_collective_name_attestations_res ON public.collective_name_attestations USING btree (res_id);
+
+
+--
+-- Name: idx_collective_names_collective; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_collective_names_collective ON public.collective_names USING btree (collective_id);
+
+
+--
 -- Name: idx_expressions_work; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -1407,6 +2254,34 @@ CREATE INDEX idx_manifestation_expressions_expression ON public.manifestation_ex
 --
 
 CREATE INDEX idx_manifestation_statements_manifestation ON public.manifestation_statements USING btree (manifestation_id);
+
+
+--
+-- Name: idx_person_name_attestations_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_person_name_attestations_name ON public.person_name_attestations USING btree (name_id);
+
+
+--
+-- Name: idx_person_name_attestations_res; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_person_name_attestations_res ON public.person_name_attestations USING btree (res_id);
+
+
+--
+-- Name: idx_person_names_person; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_person_names_person ON public.person_names USING btree (person_id);
+
+
+--
+-- Name: idx_place_names_place; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_place_names_place ON public.place_names USING btree (place_id);
 
 
 --
@@ -1459,6 +2334,34 @@ CREATE INDEX legacy_idx_works_year ON public.legacy_works USING btree (year);
 
 
 --
+-- Name: uq_person_names_preferred; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_person_names_preferred ON public.person_names USING btree (person_id, script) WHERE ((name_type = 'preferred'::text) AND (derived_from IS NULL));
+
+
+--
+-- Name: uq_place_names_preferred; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_place_names_preferred ON public.place_names USING btree (place_id, lang) WHERE is_preferred;
+
+
+--
+-- Name: agents agents_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER agents_res_delete AFTER DELETE ON public.agents FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: collectives collectives_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER collectives_res_delete AFTER DELETE ON public.collectives FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
 -- Name: expressions expressions_res_delete; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -1480,10 +2383,144 @@ CREATE TRIGGER manifestations_res_delete AFTER DELETE ON public.manifestations F
 
 
 --
+-- Name: persons persons_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER persons_res_delete AFTER DELETE ON public.persons FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: places places_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER places_res_delete AFTER DELETE ON public.places FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
 -- Name: works works_res_delete; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER works_res_delete AFTER DELETE ON public.works FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: agents agents_agent_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agents
+    ADD CONSTRAINT agents_agent_type_fkey FOREIGN KEY (agent_type) REFERENCES public.agent_types(code);
+
+
+--
+-- Name: agents agents_id_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agents
+    ADD CONSTRAINT agents_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: collective_name_attestations collective_name_attestations_name_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_name_attestations
+    ADD CONSTRAINT collective_name_attestations_name_id_fkey FOREIGN KEY (name_id) REFERENCES public.collective_names(id) ON DELETE CASCADE;
+
+
+--
+-- Name: collective_name_attestations collective_name_attestations_res_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_name_attestations
+    ADD CONSTRAINT collective_name_attestations_res_id_fkey FOREIGN KEY (res_id) REFERENCES public.res(id) ON DELETE CASCADE;
+
+
+--
+-- Name: collective_names collective_names_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: collective_names collective_names_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: collective_names collective_names_collective_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_collective_id_fkey FOREIGN KEY (collective_id) REFERENCES public.collectives(id) ON DELETE CASCADE;
+
+
+--
+-- Name: collective_names collective_names_conversion_scheme_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_conversion_scheme_fkey FOREIGN KEY (conversion_scheme) REFERENCES public.conversion_schemes(code);
+
+
+--
+-- Name: collective_names collective_names_derived_from_collective_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_derived_from_collective_id_fkey FOREIGN KEY (derived_from, collective_id) REFERENCES public.collective_names(id, collective_id) ON DELETE CASCADE;
+
+
+--
+-- Name: collective_names collective_names_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: collective_names collective_names_name_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_name_type_fkey FOREIGN KEY (name_type) REFERENCES public.name_types(code);
+
+
+--
+-- Name: collective_names collective_names_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collective_names
+    ADD CONSTRAINT collective_names_script_fkey FOREIGN KEY (script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: collectives collectives_category_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collectives
+    ADD CONSTRAINT collectives_category_fkey FOREIGN KEY (category) REFERENCES public.collective_categories(code);
+
+
+--
+-- Name: collectives collectives_id_agent_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collectives
+    ADD CONSTRAINT collectives_id_agent_type_fkey FOREIGN KEY (id, agent_type) REFERENCES public.agents(id, agent_type) ON DELETE CASCADE;
+
+
+--
+-- Name: collectives collectives_parent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.collectives
+    ADD CONSTRAINT collectives_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.collectives(id) ON DELETE RESTRICT;
 
 
 --
@@ -1543,6 +2580,22 @@ ALTER TABLE ONLY public.expressions
 
 
 --
+-- Name: generational_labels generational_labels_code_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generational_labels
+    ADD CONSTRAINT generational_labels_code_fkey FOREIGN KEY (code) REFERENCES public.generational_markers(code);
+
+
+--
+-- Name: generational_labels generational_labels_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generational_labels
+    ADD CONSTRAINT generational_labels_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
 -- Name: identifier_schemes identifier_schemes_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1575,11 +2628,27 @@ ALTER TABLE ONLY public.imprint_agents
 
 
 --
+-- Name: imprint_agents imprint_agents_collective_name_id_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_agents
+    ADD CONSTRAINT imprint_agents_collective_name_id_agent_id_fkey FOREIGN KEY (collective_name_id, agent_id) REFERENCES public.collective_names(id, collective_id) ON DELETE SET NULL (collective_name_id);
+
+
+--
 -- Name: imprint_agents imprint_agents_imprint_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.imprint_agents
     ADD CONSTRAINT imprint_agents_imprint_id_fkey FOREIGN KEY (imprint_id) REFERENCES public.imprints(id) ON DELETE CASCADE;
+
+
+--
+-- Name: imprint_agents imprint_agents_person_name_id_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_agents
+    ADD CONSTRAINT imprint_agents_person_name_id_agent_id_fkey FOREIGN KEY (person_name_id, agent_id) REFERENCES public.person_names(id, person_id) ON DELETE SET NULL (person_name_id);
 
 
 --
@@ -1852,6 +2921,214 @@ ALTER TABLE ONLY public.manifestations
 
 ALTER TABLE ONLY public.manifestations
     ADD CONSTRAINT manifestations_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: name_element_placements name_element_placements_locale_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_element_placements
+    ADD CONSTRAINT name_element_placements_locale_fkey FOREIGN KEY (locale) REFERENCES public.languages(code);
+
+
+--
+-- Name: particle_rules particle_rules_culture_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.particle_rules
+    ADD CONSTRAINT particle_rules_culture_fkey FOREIGN KEY (culture) REFERENCES public.name_cultures(code);
+
+
+--
+-- Name: person_name_attestations person_name_attestations_name_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_name_attestations
+    ADD CONSTRAINT person_name_attestations_name_id_fkey FOREIGN KEY (name_id) REFERENCES public.person_names(id) ON DELETE CASCADE;
+
+
+--
+-- Name: person_name_attestations person_name_attestations_res_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_name_attestations
+    ADD CONSTRAINT person_name_attestations_res_id_fkey FOREIGN KEY (res_id) REFERENCES public.res(id) ON DELETE CASCADE;
+
+
+--
+-- Name: person_names person_names_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: person_names person_names_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: person_names person_names_conversion_scheme_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_conversion_scheme_fkey FOREIGN KEY (conversion_scheme) REFERENCES public.conversion_schemes(code);
+
+
+--
+-- Name: person_names person_names_culture_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_culture_fkey FOREIGN KEY (culture) REFERENCES public.name_cultures(code);
+
+
+--
+-- Name: person_names person_names_derived_from_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_derived_from_person_id_fkey FOREIGN KEY (derived_from, person_id) REFERENCES public.person_names(id, person_id) ON DELETE CASCADE;
+
+
+--
+-- Name: person_names person_names_generational_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_generational_fkey FOREIGN KEY (generational) REFERENCES public.generational_markers(code);
+
+
+--
+-- Name: person_names person_names_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: person_names person_names_name_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_name_type_fkey FOREIGN KEY (name_type) REFERENCES public.name_types(code);
+
+
+--
+-- Name: person_names person_names_person_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_person_id_fkey FOREIGN KEY (person_id) REFERENCES public.persons(id) ON DELETE CASCADE;
+
+
+--
+-- Name: person_names person_names_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.person_names
+    ADD CONSTRAINT person_names_script_fkey FOREIGN KEY (script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: persons persons_id_agent_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.persons
+    ADD CONSTRAINT persons_id_agent_type_fkey FOREIGN KEY (id, agent_type) REFERENCES public.agents(id, agent_type) ON DELETE CASCADE;
+
+
+--
+-- Name: place_names place_names_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: place_names place_names_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: place_names place_names_conversion_scheme_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_conversion_scheme_fkey FOREIGN KEY (conversion_scheme) REFERENCES public.conversion_schemes(code);
+
+
+--
+-- Name: place_names place_names_derived_from_place_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_derived_from_place_id_fkey FOREIGN KEY (derived_from, place_id) REFERENCES public.place_names(id, place_id) ON DELETE CASCADE;
+
+
+--
+-- Name: place_names place_names_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: place_names place_names_name_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_name_type_fkey FOREIGN KEY (name_type) REFERENCES public.place_name_types(code);
+
+
+--
+-- Name: place_names place_names_place_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_place_id_fkey FOREIGN KEY (place_id) REFERENCES public.places(id) ON DELETE CASCADE;
+
+
+--
+-- Name: place_names place_names_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_names
+    ADD CONSTRAINT place_names_script_fkey FOREIGN KEY (script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: places places_category_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.places
+    ADD CONSTRAINT places_category_fkey FOREIGN KEY (category) REFERENCES public.place_categories(code);
+
+
+--
+-- Name: places places_id_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.places
+    ADD CONSTRAINT places_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: places places_parent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.places
+    ADD CONSTRAINT places_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.places(id) ON DELETE RESTRICT;
 
 
 --
