@@ -81,6 +81,65 @@ $$;
 
 
 --
+-- Name: identifier_checksum_ok(text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.identifier_checksum_ok(p_scheme text, p_normalized text) RETURNS boolean
+    LANGUAGE plpgsql IMMUTABLE
+    AS $_$
+DECLARE
+    s int := 0;
+    d int;
+    i int;
+BEGIN
+    IF p_scheme = 'isbn' AND p_normalized ~ '^[0-9]{9}[0-9X]$' THEN
+        FOR i IN 1..10 LOOP
+            d := CASE WHEN substr(p_normalized, i, 1) = 'X' THEN 10 ELSE substr(p_normalized, i, 1)::int END;
+            s := s + (11 - i) * d;
+        END LOOP;
+        RETURN s % 11 = 0;
+    ELSIF p_scheme = 'isbn' AND p_normalized ~ '^[0-9]{13}$' THEN
+        FOR i IN 1..13 LOOP
+            s := s + substr(p_normalized, i, 1)::int * CASE WHEN i % 2 = 0 THEN 3 ELSE 1 END;
+        END LOOP;
+        RETURN s % 10 = 0;
+    ELSIF p_scheme IN ('issn', 'issn_l') AND p_normalized ~ '^[0-9]{7}[0-9X]$' THEN
+        FOR i IN 1..7 LOOP
+            s := s + (9 - i) * substr(p_normalized, i, 1)::int;
+        END LOOP;
+        d := (11 - s % 11) % 11;
+        RETURN substr(p_normalized, 8, 1) = CASE WHEN d = 10 THEN 'X' ELSE d::text END;
+    ELSIF p_scheme = 'orcid' AND replace(p_normalized, '-', '') ~ '^[0-9]{15}[0-9X]$' THEN
+        FOR i IN 1..15 LOOP
+            s := (s + substr(replace(p_normalized, '-', ''), i, 1)::int) * 2;
+        END LOOP;
+        d := (12 - s % 11) % 11;
+        RETURN right(p_normalized, 1) = CASE WHEN d = 10 THEN 'X' ELSE d::text END;
+    ELSIF p_scheme IN ('isbn', 'issn', 'issn_l', 'orcid') THEN
+        RETURN false;  -- wrong length or characters
+    END IF;
+    RETURN NULL;
+END $_$;
+
+
+--
+-- Name: identifiers_check_kind(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.identifiers_check_kind() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE v_kind text;
+BEGIN
+    SELECT res_kind INTO v_kind FROM public.identifier_schemes WHERE code = NEW.scheme;
+    IF v_kind IS NOT NULL AND v_kind <> NEW.res_kind THEN
+        RAISE EXCEPTION 'identifier scheme % applies to %, not to %', NEW.scheme, v_kind, NEW.res_kind;
+    END IF;
+    RETURN NEW;
+END $$;
+
+
+--
 -- Name: new_agent(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -102,6 +161,26 @@ END $$;
 CREATE FUNCTION public.new_res(p_kind text) RETURNS bigint
     LANGUAGE sql
     AS $$ INSERT INTO public.res (kind) VALUES (p_kind) RETURNING id $$;
+
+
+--
+-- Name: normalize_identifier(text, text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.normalize_identifier(p_scheme text, p_value text) RETURNS text
+    LANGUAGE sql IMMUTABLE
+    AS $_$
+    SELECT CASE
+        WHEN p_scheme IN ('isbn', 'issn', 'issn_l') THEN upper(regexp_replace(p_value, '[^0-9Xx]', '', 'g'))
+        WHEN p_scheme = 'doi'   THEN lower(regexp_replace(btrim(p_value), '^(https?://(dx\.)?doi\.org/|doi:)', '', 'i'))
+        -- full URI, shortened orcid.org/… form (ORCID display guidelines) or an informal ORCID: prefix
+        -- canonical form 0000-0000-0000-000X, also from unhyphenated input
+        WHEN p_scheme = 'orcid' THEN regexp_replace(
+            upper(regexp_replace(regexp_replace(btrim(p_value), '^((https?://)?(www\.)?orcid\.org/|orcid:\s*)', '', 'i'), '[\s-]', '', 'g')),
+            '^(.{4})(.{4})(.{4})(.{4})$', '\1-\2-\3-\4')
+        WHEN p_scheme = 'wikidata' THEN upper(btrim(p_value))
+        ELSE btrim(p_value) END
+$_$;
 
 
 --
@@ -437,6 +516,40 @@ COMMENT ON COLUMN public.collectives.parent_id IS 'LRM-R31: the larger collectiv
 
 
 --
+-- Name: contributions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.contributions (
+    id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    agent_id bigint NOT NULL,
+    agent_kind text DEFAULT 'agent'::text NOT NULL,
+    role text NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT contributions_agent_kind_check CHECK ((agent_kind = 'agent'::text)),
+    CONSTRAINT contributions_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: contributions_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.contributions ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.contributions_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: conversion_schemes; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -525,6 +638,43 @@ CREATE TABLE public.identifier_statuses (
     label_en text NOT NULL,
     label_hu text,
     note text
+);
+
+
+--
+-- Name: identifiers; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.identifiers (
+    id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    scheme text NOT NULL,
+    value text NOT NULL,
+    normalized text GENERATED ALWAYS AS (public.normalize_identifier(scheme, value)) STORED NOT NULL,
+    status text DEFAULT 'valid'::text NOT NULL,
+    qualifier text,
+    assigned_by bigint,
+    assigned_by_kind text DEFAULT 'agent'::text NOT NULL,
+    corrects bigint,
+    basis text,
+    note text,
+    CONSTRAINT identifiers_assigned_by_kind_check CHECK ((assigned_by_kind = 'agent'::text)),
+    CONSTRAINT identifiers_check CHECK ((corrects <> id))
+);
+
+
+--
+-- Name: identifiers_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.identifiers ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.identifiers_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -1131,6 +1281,93 @@ CREATE TABLE public.manifestations (
 
 
 --
+-- Name: person_name_attestations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.person_name_attestations (
+    id bigint NOT NULL,
+    name_id bigint NOT NULL,
+    res_id bigint,
+    source_text text,
+    locator text,
+    note text,
+    CONSTRAINT person_name_attestations_check CHECK (((res_id IS NOT NULL) OR (source_text IS NOT NULL)))
+);
+
+
+--
+-- Name: statement_agents; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.statement_agents (
+    statement_id bigint NOT NULL,
+    "position" integer NOT NULL,
+    agent_id bigint,
+    agent_kind text DEFAULT 'agent'::text NOT NULL,
+    person_name_id bigint,
+    collective_name_id bigint,
+    as_printed text,
+    basis text DEFAULT 'transcribed'::text NOT NULL,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT statement_agents_agent_kind_check CHECK ((agent_kind = 'agent'::text)),
+    CONSTRAINT statement_agents_check CHECK (((agent_id IS NOT NULL) OR (as_printed IS NOT NULL))),
+    CONSTRAINT statement_agents_check1 CHECK ((num_nonnulls(person_name_id, collective_name_id) <= 1)),
+    CONSTRAINT statement_agents_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: name_attestations; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.name_attestations AS
+ SELECT 'person'::text AS name_kind,
+    a.name_id,
+    'attestation'::text AS via,
+    a.res_id,
+    a.source_text,
+    a.locator
+   FROM public.person_name_attestations a
+UNION ALL
+ SELECT 'collective'::text AS name_kind,
+    a.name_id,
+    'attestation'::text AS via,
+    a.res_id,
+    a.source_text,
+    a.locator
+   FROM public.collective_name_attestations a
+UNION ALL
+ SELECT
+        CASE
+            WHEN (sa.person_name_id IS NOT NULL) THEN 'person'::text
+            ELSE 'collective'::text
+        END AS name_kind,
+    COALESCE(sa.person_name_id, sa.collective_name_id) AS name_id,
+    'statement'::text AS via,
+    ms.manifestation_id AS res_id,
+    NULL::text AS source_text,
+    ms.source AS locator
+   FROM (public.statement_agents sa
+     JOIN public.manifestation_statements ms ON ((ms.id = sa.statement_id)))
+  WHERE (num_nonnulls(sa.person_name_id, sa.collective_name_id) = 1)
+UNION ALL
+ SELECT
+        CASE
+            WHEN (ia.person_name_id IS NOT NULL) THEN 'person'::text
+            ELSE 'collective'::text
+        END AS name_kind,
+    COALESCE(ia.person_name_id, ia.collective_name_id) AS name_id,
+    'imprint'::text AS via,
+    im.manifestation_id AS res_id,
+    NULL::text AS source_text,
+    im.function AS locator
+   FROM (public.imprint_agents ia
+     JOIN public.imprints im ON ((im.id = ia.imprint_id)))
+  WHERE (num_nonnulls(ia.person_name_id, ia.collective_name_id) = 1);
+
+
+--
 -- Name: name_cultures; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1179,21 +1416,6 @@ CREATE TABLE public.particle_rules (
     culture text NOT NULL,
     in_entry boolean NOT NULL,
     CONSTRAINT particle_rules_particle_check CHECK (((particle = lower(particle)) AND (particle !~ '’'::text)))
-);
-
-
---
--- Name: person_name_attestations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.person_name_attestations (
-    id bigint NOT NULL,
-    name_id bigint NOT NULL,
-    res_id bigint,
-    source_text text,
-    locator text,
-    note text,
-    CONSTRAINT person_name_attestations_check CHECK (((res_id IS NOT NULL) OR (source_text IS NOT NULL)))
 );
 
 
@@ -1377,6 +1599,20 @@ CREATE VIEW public.qa_agents_without_preferred_name AS
 
 
 --
+-- Name: qa_identifier_checksums; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.qa_identifier_checksums AS
+ SELECT id,
+    res_id,
+    scheme,
+    value,
+    status
+   FROM public.identifiers i
+  WHERE ((status = 'valid'::text) AND (public.identifier_checksum_ok(scheme, normalized) IS FALSE));
+
+
+--
 -- Name: qa_manifestations_without_expression; Type: VIEW; Schema: public; Owner: -
 --
 
@@ -1484,6 +1720,41 @@ CREATE TABLE public.relation_types (
     domain_kind text NOT NULL,
     range_kind text NOT NULL,
     note text
+);
+
+
+--
+-- Name: relations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.relations (
+    id bigint NOT NULL,
+    type text NOT NULL,
+    from_id bigint NOT NULL,
+    from_kind text NOT NULL,
+    to_id bigint NOT NULL,
+    to_kind text NOT NULL,
+    locator text,
+    "position" integer,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT relations_check CHECK ((from_id <> to_id)),
+    CONSTRAINT relations_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: relations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.relations ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.relations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -1747,6 +2018,30 @@ ALTER TABLE ONLY public.collectives
 
 
 --
+-- Name: contributions contributions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: contributions contributions_res_id_agent_id_role_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_res_id_agent_id_role_key UNIQUE (res_id, agent_id, role);
+
+
+--
+-- Name: contributions contributions_res_id_role_position_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_res_id_role_position_key UNIQUE (res_id, role, "position") DEFERRABLE INITIALLY DEFERRED;
+
+
+--
 -- Name: conversion_schemes conversion_schemes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1792,6 +2087,22 @@ ALTER TABLE ONLY public.identifier_schemes
 
 ALTER TABLE ONLY public.identifier_statuses
     ADD CONSTRAINT identifier_statuses_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: identifiers identifiers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: identifiers identifiers_res_id_scheme_normalized_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_res_id_scheme_normalized_key UNIQUE (res_id, scheme, normalized);
 
 
 --
@@ -2083,6 +2394,22 @@ ALTER TABLE ONLY public.relation_types
 
 
 --
+-- Name: relations relations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relations
+    ADD CONSTRAINT relations_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: relations relations_type_from_id_to_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relations
+    ADD CONSTRAINT relations_type_from_id_to_id_key UNIQUE (type, from_id, to_id);
+
+
+--
 -- Name: res res_id_kind_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2136,6 +2463,14 @@ ALTER TABLE ONLY public.scripts
 
 ALTER TABLE ONLY public.sources
     ADD CONSTRAINT sources_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: statement_agents statement_agents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_agents
+    ADD CONSTRAINT statement_agents_pkey PRIMARY KEY (statement_id, "position");
 
 
 --
@@ -2208,10 +2543,31 @@ CREATE INDEX idx_collective_names_collective ON public.collective_names USING bt
 
 
 --
+-- Name: idx_contributions_agent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_contributions_agent ON public.contributions USING btree (agent_id);
+
+
+--
 -- Name: idx_expressions_work; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_expressions_work ON public.expressions USING btree (work_id);
+
+
+--
+-- Name: idx_identifiers_lookup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_identifiers_lookup ON public.identifiers USING btree (scheme, normalized);
+
+
+--
+-- Name: idx_identifiers_res; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_identifiers_res ON public.identifiers USING btree (res_id);
 
 
 --
@@ -2282,6 +2638,27 @@ CREATE INDEX idx_person_names_person ON public.person_names USING btree (person_
 --
 
 CREATE INDEX idx_place_names_place ON public.place_names USING btree (place_id);
+
+
+--
+-- Name: idx_relations_from; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_relations_from ON public.relations USING btree (from_id);
+
+
+--
+-- Name: idx_relations_to; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_relations_to ON public.relations USING btree (to_id);
+
+
+--
+-- Name: idx_statement_agents_agent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_statement_agents_agent ON public.statement_agents USING btree (agent_id);
 
 
 --
@@ -2366,6 +2743,13 @@ CREATE TRIGGER collectives_res_delete AFTER DELETE ON public.collectives FOR EAC
 --
 
 CREATE TRIGGER expressions_res_delete AFTER DELETE ON public.expressions FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: identifiers identifiers_check_kind; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER identifiers_check_kind BEFORE INSERT OR UPDATE OF scheme, res_kind ON public.identifiers FOR EACH ROW EXECUTE FUNCTION public.identifiers_check_kind();
 
 
 --
@@ -2524,6 +2908,46 @@ ALTER TABLE ONLY public.collectives
 
 
 --
+-- Name: contributions contributions_agent_id_agent_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_agent_id_agent_kind_fkey FOREIGN KEY (agent_id, agent_kind) REFERENCES public.res(id, kind) ON DELETE RESTRICT;
+
+
+--
+-- Name: contributions contributions_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: contributions contributions_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: contributions contributions_res_id_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: contributions contributions_role_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.contributions
+    ADD CONSTRAINT contributions_role_res_kind_fkey FOREIGN KEY (role, res_kind) REFERENCES public.roles(code, res_kind);
+
+
+--
 -- Name: conversion_schemes conversion_schemes_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2601,6 +3025,54 @@ ALTER TABLE ONLY public.generational_labels
 
 ALTER TABLE ONLY public.identifier_schemes
     ADD CONSTRAINT identifier_schemes_res_kind_fkey FOREIGN KEY (res_kind) REFERENCES public.res_kinds(code);
+
+
+--
+-- Name: identifiers identifiers_assigned_by_assigned_by_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_assigned_by_assigned_by_kind_fkey FOREIGN KEY (assigned_by, assigned_by_kind) REFERENCES public.res(id, kind) ON DELETE RESTRICT;
+
+
+--
+-- Name: identifiers identifiers_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: identifiers identifiers_corrects_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_corrects_fkey FOREIGN KEY (corrects) REFERENCES public.identifiers(id) ON DELETE SET NULL;
+
+
+--
+-- Name: identifiers identifiers_res_id_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: identifiers identifiers_scheme_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_scheme_fkey FOREIGN KEY (scheme) REFERENCES public.identifier_schemes(code);
+
+
+--
+-- Name: identifiers identifiers_status_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifiers
+    ADD CONSTRAINT identifiers_status_fkey FOREIGN KEY (status) REFERENCES public.identifier_statuses(code);
 
 
 --
@@ -3156,6 +3628,46 @@ ALTER TABLE ONLY public.relation_types
 
 
 --
+-- Name: relations relations_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relations
+    ADD CONSTRAINT relations_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: relations relations_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relations
+    ADD CONSTRAINT relations_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: relations relations_from_id_from_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relations
+    ADD CONSTRAINT relations_from_id_from_kind_fkey FOREIGN KEY (from_id, from_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: relations relations_to_id_to_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relations
+    ADD CONSTRAINT relations_to_id_to_kind_fkey FOREIGN KEY (to_id, to_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: relations relations_type_from_kind_to_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relations
+    ADD CONSTRAINT relations_type_from_kind_to_kind_fkey FOREIGN KEY (type, from_kind, to_kind) REFERENCES public.relation_types(code, domain_kind, range_kind);
+
+
+--
 -- Name: res res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3169,6 +3681,54 @@ ALTER TABLE ONLY public.res
 
 ALTER TABLE ONLY public.roles
     ADD CONSTRAINT roles_res_kind_fkey FOREIGN KEY (res_kind) REFERENCES public.res_kinds(code);
+
+
+--
+-- Name: statement_agents statement_agents_agent_id_agent_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_agents
+    ADD CONSTRAINT statement_agents_agent_id_agent_kind_fkey FOREIGN KEY (agent_id, agent_kind) REFERENCES public.res(id, kind) ON DELETE RESTRICT;
+
+
+--
+-- Name: statement_agents statement_agents_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_agents
+    ADD CONSTRAINT statement_agents_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: statement_agents statement_agents_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_agents
+    ADD CONSTRAINT statement_agents_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: statement_agents statement_agents_collective_name_id_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_agents
+    ADD CONSTRAINT statement_agents_collective_name_id_agent_id_fkey FOREIGN KEY (collective_name_id, agent_id) REFERENCES public.collective_names(id, collective_id) ON DELETE SET NULL (collective_name_id);
+
+
+--
+-- Name: statement_agents statement_agents_person_name_id_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_agents
+    ADD CONSTRAINT statement_agents_person_name_id_agent_id_fkey FOREIGN KEY (person_name_id, agent_id) REFERENCES public.person_names(id, person_id) ON DELETE SET NULL (person_name_id);
+
+
+--
+-- Name: statement_agents statement_agents_statement_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_agents
+    ADD CONSTRAINT statement_agents_statement_id_fkey FOREIGN KEY (statement_id) REFERENCES public.manifestation_statements(id) ON DELETE CASCADE;
 
 
 --

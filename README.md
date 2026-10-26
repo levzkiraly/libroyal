@@ -31,6 +31,7 @@ in database backups, never here.
 | `agents` | Agents (ágens): persons (személy) and collective agents (kollektív ágens); structured personal names (MOKKA KSZ4), collective names; name types, name cultures, the KSZ4 2.1.2.3 particle table, generational markers |
 | `places` | Places with time-bound names in any language and script |
 | `name_rendering` | KSZ4 heading, natural display form per output language and Hungarian-collated sort columns of personal names (`person_names_rendered`); particle QA view |
+| `wemi_links` | Typed relations between entities; contributions (role fixes the level); agents named in manifestation statements with the printed name form; identifiers with normalization, status, corrections and check-digit QA; `name_attestations` view |
 
 A second target, `dev` (`libroyal_dev`), is configured for trying changes before they
 reach the live database: `sqitch deploy --verify dev`.
