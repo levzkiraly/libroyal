@@ -1,0 +1,6 @@
+# Data dumps and backups never belong in this repo (structure only).
+*.dump
+*.backup
+*.sql.gz
+.backup/
+regulations/
