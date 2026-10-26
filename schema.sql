@@ -20,6 +20,99 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: bases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.bases (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    note text
+);
+
+
+--
+-- Name: certainties; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.certainties (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    isbd_mark text
+);
+
+
+--
+-- Name: conversion_schemes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.conversion_schemes (
+    code text NOT NULL,
+    label text NOT NULL,
+    source_script text NOT NULL,
+    target_script text NOT NULL,
+    lang text,
+    authority text,
+    revision text,
+    url text,
+    bcp47_t text,
+    generator text,
+    note text,
+    CONSTRAINT conversion_schemes_check CHECK ((source_script <> target_script))
+);
+
+
+--
+-- Name: identifier_schemes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.identifier_schemes (
+    code text NOT NULL,
+    label text NOT NULL,
+    res_kind text,
+    url_template text,
+    note text
+);
+
+
+--
+-- Name: identifier_statuses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.identifier_statuses (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    note text
+);
+
+
+--
+-- Name: imprint_functions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.imprint_functions (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    lrm_id text
+);
+
+
+--
+-- Name: languages; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.languages (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    CONSTRAINT languages_code_check CHECK ((code ~ '^[a-z]{2,3}$'::text))
+);
+
+
+--
 -- Name: legacy_persons; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -394,6 +487,128 @@ CREATE VIEW public.lo_bibliography AS
 
 
 --
+-- Name: manifestation_categories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manifestation_categories (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    note text
+);
+
+
+--
+-- Name: place_name_types; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_name_types (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text
+);
+
+
+--
+-- Name: relation_types; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.relation_types (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    inverse_label_en text NOT NULL,
+    lrm_id text,
+    parent text,
+    domain_kind text NOT NULL,
+    range_kind text NOT NULL,
+    note text
+);
+
+
+--
+-- Name: res_kinds; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.res_kinds (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    lrm_id text
+);
+
+
+--
+-- Name: roles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.roles (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    res_kind text NOT NULL,
+    lrm_id text
+);
+
+
+--
+-- Name: scripts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.scripts (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    CONSTRAINT scripts_code_check CHECK ((code ~ '^[A-Z][a-z]{3}$'::text))
+);
+
+
+--
+-- Name: sources; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.sources (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text
+);
+
+
+--
+-- Name: statement_types; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.statement_types (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text
+);
+
+
+--
+-- Name: title_types; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.title_types (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    note text
+);
+
+
+--
+-- Name: work_categories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.work_categories (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    note text
+);
+
+
+--
 -- Name: legacy_persons id; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -426,6 +641,62 @@ ALTER TABLE ONLY public.legacy_work_copies ALTER COLUMN id SET DEFAULT nextval('
 --
 
 ALTER TABLE ONLY public.legacy_works ALTER COLUMN id SET DEFAULT nextval('public.legacy_works_id_seq'::regclass);
+
+
+--
+-- Name: bases bases_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.bases
+    ADD CONSTRAINT bases_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: certainties certainties_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.certainties
+    ADD CONSTRAINT certainties_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: conversion_schemes conversion_schemes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversion_schemes
+    ADD CONSTRAINT conversion_schemes_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: identifier_schemes identifier_schemes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifier_schemes
+    ADD CONSTRAINT identifier_schemes_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: identifier_statuses identifier_statuses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifier_statuses
+    ADD CONSTRAINT identifier_statuses_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: imprint_functions imprint_functions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.imprint_functions
+    ADD CONSTRAINT imprint_functions_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: languages languages_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.languages
+    ADD CONSTRAINT languages_pkey PRIMARY KEY (code);
 
 
 --
@@ -501,6 +772,102 @@ ALTER TABLE ONLY public.legacy_works
 
 
 --
+-- Name: manifestation_categories manifestation_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.manifestation_categories
+    ADD CONSTRAINT manifestation_categories_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: place_name_types place_name_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.place_name_types
+    ADD CONSTRAINT place_name_types_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: relation_types relation_types_code_domain_kind_range_kind_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relation_types
+    ADD CONSTRAINT relation_types_code_domain_kind_range_kind_key UNIQUE (code, domain_kind, range_kind);
+
+
+--
+-- Name: relation_types relation_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relation_types
+    ADD CONSTRAINT relation_types_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: res_kinds res_kinds_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.res_kinds
+    ADD CONSTRAINT res_kinds_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: roles roles_code_res_kind_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.roles
+    ADD CONSTRAINT roles_code_res_kind_key UNIQUE (code, res_kind);
+
+
+--
+-- Name: roles roles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.roles
+    ADD CONSTRAINT roles_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: scripts scripts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.scripts
+    ADD CONSTRAINT scripts_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: sources sources_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sources
+    ADD CONSTRAINT sources_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: statement_types statement_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.statement_types
+    ADD CONSTRAINT statement_types_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: title_types title_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.title_types
+    ADD CONSTRAINT title_types_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: work_categories work_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.work_categories
+    ADD CONSTRAINT work_categories_pkey PRIMARY KEY (code);
+
+
+--
 -- Name: legacy_idx_persons_family_name; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -540,6 +907,38 @@ CREATE INDEX legacy_idx_works_type ON public.legacy_works USING btree (type);
 --
 
 CREATE INDEX legacy_idx_works_year ON public.legacy_works USING btree (year);
+
+
+--
+-- Name: conversion_schemes conversion_schemes_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversion_schemes
+    ADD CONSTRAINT conversion_schemes_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: conversion_schemes conversion_schemes_source_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversion_schemes
+    ADD CONSTRAINT conversion_schemes_source_script_fkey FOREIGN KEY (source_script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: conversion_schemes conversion_schemes_target_script_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversion_schemes
+    ADD CONSTRAINT conversion_schemes_target_script_fkey FOREIGN KEY (target_script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: identifier_schemes identifier_schemes_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.identifier_schemes
+    ADD CONSTRAINT identifier_schemes_res_kind_fkey FOREIGN KEY (res_kind) REFERENCES public.res_kinds(code);
 
 
 --
@@ -588,6 +987,38 @@ ALTER TABLE ONLY public.legacy_work_tags
 
 ALTER TABLE ONLY public.legacy_works
     ADD CONSTRAINT legacy_works_series_id_fkey FOREIGN KEY (series_id) REFERENCES public.legacy_series(id) ON DELETE SET NULL;
+
+
+--
+-- Name: relation_types relation_types_domain_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relation_types
+    ADD CONSTRAINT relation_types_domain_kind_fkey FOREIGN KEY (domain_kind) REFERENCES public.res_kinds(code);
+
+
+--
+-- Name: relation_types relation_types_parent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relation_types
+    ADD CONSTRAINT relation_types_parent_fkey FOREIGN KEY (parent) REFERENCES public.relation_types(code);
+
+
+--
+-- Name: relation_types relation_types_range_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.relation_types
+    ADD CONSTRAINT relation_types_range_kind_fkey FOREIGN KEY (range_kind) REFERENCES public.res_kinds(code);
+
+
+--
+-- Name: roles roles_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.roles
+    ADD CONSTRAINT roles_res_kind_fkey FOREIGN KEY (res_kind) REFERENCES public.res_kinds(code);
 
 
 --
