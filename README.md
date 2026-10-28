@@ -33,12 +33,20 @@ in database backups, never here.
 | `name_rendering` | KSZ4 heading, natural display form per output language and Hungarian-collated sort columns of personal names (`person_names_rendered`); particle QA view |
 | `wemi_links` | Typed relations between entities; contributions (role fixes the level); agents named in manifestation statements with the printed name form; identifiers with normalization, status, corrections and check-digit QA; `name_attestations` view |
 | `catalogue_links` | Identifier schemes for catalogue records (OSZK NEKTÁR and MOKKA-ODR permalinks, LCCN, DNB, Arcanum); `checked_on_success` / `checked_on_error` on identifiers |
+| `legacy_mapping` | Correspondence tables for carrying the pre-LRM entries into the four-level model (`legacy_map`, `legacy_person_map`, `legacy_migration_res`); `other_format_of`, the work-to-work relation of print and online serials; the legacy tables stay |
+| `citation_names` | `person_names.citation_name`: the name used in labels when it differs from the entry element |
+| `lo_bibliography` (reworked) | The LibreOffice view over the four-level model, scoped to the migrated entries (interim project view); labels computed: names (up to four, else "First et al."), year, suffix only within the view, ordered by title with multipart works as blocks |
 
 A second target, `dev` (`libroyal_dev`), is configured for trying changes before they
 reach the live database: `sqitch deploy --verify dev`.
 
 The live database was registered with `sqitch deploy --log-only`: the baseline
 scripts were recorded as deployed without being run against it.
+
+**Data stays out of the plan.** Migrating or correcting catalogue data is not a
+change here: such scripts are kept with the backups (`.backup/seed/`, not tracked)
+and run once with `psql -v ON_ERROR_STOP=1 -f <script>` after the structure they
+need is deployed.
 
 ## Password
 
@@ -60,7 +68,8 @@ set either at the point of use from your secret store, e.g.
 6. Drop the copy: `dropdb -h localhost -U postgres libroyal_dev`.
 
 **Views:** once deployed, change `lo_bibliography` with
-`sqitch rework lo_bibliography`, which keeps the previous version under the
+`sqitch rework lo_bibliography` (done once, after `legacy_mapping`; the revert of a
+reworked view must account for tables renamed since the previous version), which keeps the previous version under the
 last tag and lets the view's history read as a sequence of `CREATE OR REPLACE`
 edits. This requires a tag after the last deployment of the view.
 

@@ -13,3 +13,6 @@ places [agents] 2026-10-26T02:22:54Z Lev Z. Király <lev.z.kiraly@gmail.com> # P
 name_rendering [agents] 2026-10-26T02:22:54Z Lev Z. Király <lev.z.kiraly@gmail.com> # Heading, display and sort-key rendering of personal names (KSZ4 structure; locale placement rules)
 wemi_links [agents] 2026-10-26T10:15:53Z Lev Z. Király <lev.z.kiraly@gmail.com> # Relations, contributions, statement agents (name forms printed on manifestations), identifiers with normalization, status and checksums
 catalogue_links [wemi_links] 2026-10-26T17:04:38Z Lev Z. Király <lev.z.kiraly@gmail.com> # Catalogue record identifiers (LCCN, DNB, Arcanum; OSZK NEKTÁR and MOKKA-ODR permalinks) and link-check dates on identifiers
+legacy_mapping [catalogue_links] 2026-10-27T22:04:38Z Lev Z. Király <lev.z.kiraly@gmail.com> # Correspondence tables for the pre-LRM entries (legacy_map, legacy_person_map, legacy_migration_res); other_format_of relation type
+citation_names [agents] 2026-10-26T22:58:39Z Lev Z. Király <lev.z.kiraly@gmail.com> # person_names.citation_name: the name a person is cited by, where it differs from the entry element
+lo_bibliography [lo_bibliography@baseline citation_names legacy_mapping] 2026-10-26T22:58:39Z Lev Z. Király <lev.z.kiraly@gmail.com> # lo_bibliography over the four-level model, scoped to the migrated entries (interim project view); computed labels
