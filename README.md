@@ -41,6 +41,7 @@ in database backups, never here.
 | `lo_views` | `lo_bibliography_rows(scope, id)`: the LibreOffice columns for the global scope, a project or a document, labels computed within the scope; `lo_sync()` and its triggers generate `lo_project_<code>` and `lo_document_<code>` |
 | `lo_bibliography` (reworked again, after `@research_layer`) | The global LibreOffice view: every entry of any project or document; Custom3 lists the projects |
 | `drop_legacy` | The pre-LRM tables (`legacy_*`) and the correspondence tables dropped; no record of the old ids is kept. The revert recreates them empty. The verify scripts of `baseline`, `legacy_rename` and `legacy_mapping` check their own result only until a later change supersedes it (read from the Sqitch registry) |
+| `subjects` | Subjects as the catalogues give them: `concepts` (a res kind for what is neither work, agent nor place; time spans as category `time_span`); `catalogue_headings`, the access points of a catalogue record as recorded (subject, genre/form, classification, keyword; vocabulary, subfields, the record's identifier), with `rejected` for a heading kept as recorded but not accepted for the work; `heading_resolutions`, the res a heading or one of its subfields designates; `work_subjects` (LRM-R12) and `work_genre_forms` derived from them; identifier scheme `gnd` |
 
 A second target, `dev` (`libroyal_dev`), is configured for trying changes before they
 reach the live database: `sqitch deploy --verify dev`.
@@ -121,6 +122,8 @@ tools/catalogue/catalogue.py lookup --arcanum "Rohonci kódex"
 
 The per-entry reports came from a `legacy` mode that checked the pre-LRM entries;
 it went with `drop_legacy`, and a mode for entries of the four-level model is still
-to be written. Reports (`validation/<id>.md`, `validation/index.md`) and the raw records
+to be written. `access_points()` reads the subject, genre/form, keyword and classification fields of a
+record (the source of `catalogue_headings`).
+Reports (`validation/<id>.md`, `validation/index.md`) and the raw records
 (`validation/raw/`) are evidence for decisions, not data; `validation/` is not
 tracked by git.

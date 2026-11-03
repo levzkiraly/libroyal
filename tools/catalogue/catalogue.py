@@ -259,6 +259,58 @@ def extract(xml, flavor):
     return f
 
 
+# MARC access points: tag → heading function (libroyal heading_functions)
+HEADING_TAGS = {'600': 'subject', '610': 'subject', '611': 'subject', '630': 'subject', '648': 'subject',
+                '650': 'subject', '651': 'subject', '655': 'genre_form', '653': 'keyword',
+                '050': 'classification', '080': 'classification', '082': 'classification'}
+CLASSIFICATIONS = {'050': 'lcc', '080': 'udc', '082': 'ddc'}
+IND2_SOURCES = {'0': 'lcsh', '4': 'unspecified'}  # second indicator 7: the source is in $2
+SOURCE_CODES = {'lcsh//hun': 'lcsh_hun'}
+CONTROL_SUBFIELDS = '0123456789'  # authority links, sources, field links: not part of the heading string
+
+
+def access_points(xml):
+    """Subject, genre/form, keyword and classification fields of a record, in field order.
+    vocabulary is None where the record does not code a source."""
+    rec = ET.fromstring(xml)
+    out = []
+    for d in rec.findall(MARC_NS + 'datafield'):
+        tag = d.get('tag')
+        fn = HEADING_TAGS.get(tag)
+        if not fn:
+            continue
+        sf = [[s.get('code'), (s.text or '').strip()] for s in d.findall(MARC_NS + 'subfield')]
+        ind = (d.get('ind1') or ' ') + (d.get('ind2') or ' ')
+        content = [(c, strip_isbd(v)) for c, v in sf if c not in CONTROL_SUBFIELDS and strip_isbd(v)]
+        if fn == 'classification':
+            vocabulary = CLASSIFICATIONS[tag]
+            value = _notations(content)
+        else:
+            vocabulary = ('uncontrolled' if fn == 'keyword' else
+                          SOURCE_CODES.get(first(subs(d, '2')), first(subs(d, '2')) or None) if ind[1] == '7' else
+                          IND2_SOURCES.get(ind[1]))
+            value = ''
+            for c, v in content:
+                sep = ' -- ' if c in 'vxyz' else '. ' if c == 'b' and tag in ('610', '611') else ' '
+                value += sep + v if value else v
+            value = re.sub(r'(?<=\d)\.$', '', value)  # ISBD period after a date (strip_isbd keeps it)
+        uri = first([v for c, v in sf if c == '0' and v.startswith('http')])
+        out.append({'tag': tag, 'indicators': ind, 'function': fn, 'vocabulary': vocabulary,
+                    'value': value, 'subfields': sf, 'authority_uri': uri or None})
+    return out
+
+
+def _notations(content):
+    """Classification notations of a field: each $a with the $b (item part) that follows it."""
+    parts = []
+    for c, v in content:
+        if c == 'a':
+            parts.append(v)
+        elif c == 'b' and parts:
+            parts[-1] += ' ' + v
+    return ' ; '.join(parts)
+
+
 def from_csl(c):
     if 'error' in c:
         return {'error': c['error']}

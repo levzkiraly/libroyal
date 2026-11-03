@@ -89,6 +89,21 @@ $$;
 
 
 --
+-- Name: heading_resolution_check(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.heading_resolution_check() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.catalogue_headings WHERE id = NEW.heading_id AND rejected IS NOT NULL) THEN
+        RAISE EXCEPTION 'heading % is rejected and cannot be resolved', NEW.heading_id;
+    END IF;
+    RETURN NEW;
+END $$;
+
+
+--
 -- Name: identifier_checksum_ok(text, text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -740,6 +755,81 @@ ALTER TABLE public.cards ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
 
 
 --
+-- Name: catalogue_headings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.catalogue_headings (
+    id bigint NOT NULL,
+    work_id bigint NOT NULL,
+    record_id bigint NOT NULL,
+    function text NOT NULL,
+    vocabulary text NOT NULL,
+    tag text NOT NULL,
+    indicators text DEFAULT '  '::text NOT NULL,
+    value text NOT NULL,
+    subfields jsonb NOT NULL,
+    authority_uri text,
+    "position" integer NOT NULL,
+    rejected text,
+    note text,
+    CONSTRAINT catalogue_headings_indicators_check CHECK ((length(indicators) = 2)),
+    CONSTRAINT catalogue_headings_position_check CHECK (("position" > 0)),
+    CONSTRAINT catalogue_headings_rejected_check CHECK ((rejected <> ''::text)),
+    CONSTRAINT catalogue_headings_subfields_check CHECK ((jsonb_typeof(subfields) = 'array'::text)),
+    CONSTRAINT catalogue_headings_tag_check CHECK ((tag ~ '^[0-9]{3}$'::text))
+);
+
+
+--
+-- Name: TABLE catalogue_headings; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.catalogue_headings IS 'access points of a catalogue record as recorded (nomens); record_id is the record''s identifier on the manifestation, work_id the work it describes';
+
+
+--
+-- Name: COLUMN catalogue_headings.value; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.catalogue_headings.value IS 'the heading as a string: subfields joined (" -- " between subdivisions)';
+
+
+--
+-- Name: COLUMN catalogue_headings.subfields; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.catalogue_headings.subfields IS 'the field''s subfields in order, [["a", "Cryptography"], ["z", "Hungary"]]';
+
+
+--
+-- Name: COLUMN catalogue_headings."position"; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.catalogue_headings."position" IS 'order of the field among the record''s access points';
+
+
+--
+-- Name: COLUMN catalogue_headings.rejected; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.catalogue_headings.rejected IS 'why the heading is not accepted for the work (e.g. a form term that describes its subject, not the work); a rejected heading stays as recorded and is not resolved';
+
+
+--
+-- Name: catalogue_headings_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.catalogue_headings ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.catalogue_headings_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: certainties; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -939,6 +1029,65 @@ COMMENT ON COLUMN public.collectives.parent_id IS 'LRM-R31: the larger collectiv
 
 
 --
+-- Name: concept_categories; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.concept_categories (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text
+);
+
+
+--
+-- Name: concept_names; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.concept_names (
+    id bigint NOT NULL,
+    concept_id bigint NOT NULL,
+    value text NOT NULL,
+    lang text,
+    is_preferred boolean DEFAULT false NOT NULL,
+    note text
+);
+
+
+--
+-- Name: TABLE concept_names; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.concept_names IS 'our labels of a concept, one preferred per language; the catalogues'' forms are in catalogue_headings';
+
+
+--
+-- Name: concept_names_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.concept_names ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.concept_names_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: concepts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.concepts (
+    id bigint DEFAULT public.new_res('concept'::text) NOT NULL,
+    kind text DEFAULT 'concept'::text NOT NULL,
+    category text DEFAULT 'topic'::text NOT NULL,
+    note text,
+    CONSTRAINT concepts_kind_check CHECK ((kind = 'concept'::text))
+);
+
+
+--
 -- Name: contributions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1071,6 +1220,59 @@ CREATE TABLE public.generational_markers (
     code text NOT NULL,
     label_en text NOT NULL
 );
+
+
+--
+-- Name: heading_functions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.heading_functions (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text,
+    marc text NOT NULL
+);
+
+
+--
+-- Name: heading_resolutions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.heading_resolutions (
+    heading_id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    part integer,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT heading_resolutions_part_check CHECK ((part > 0))
+);
+
+
+--
+-- Name: TABLE heading_resolutions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.heading_resolutions IS 'the res a heading designates; part = the subfield (1-based, in subfields) for one part of a pre-coordinated heading, NULL for the whole';
+
+
+--
+-- Name: heading_vocabularies; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.heading_vocabularies (
+    code text NOT NULL,
+    label text NOT NULL,
+    marc text NOT NULL,
+    note text
+);
+
+
+--
+-- Name: TABLE heading_vocabularies; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.heading_vocabularies IS 'where a heading''s form comes from: a subject vocabulary, a classification, or none (as the record codes it)';
 
 
 --
@@ -1898,6 +2100,23 @@ CREATE VIEW public.qa_agents_without_preferred_name AS
 
 
 --
+-- Name: qa_headings_off_work; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.qa_headings_off_work AS
+ SELECT h.id,
+    h.work_id,
+    i.res_id AS record_res_id,
+    i.res_kind AS record_res_kind
+   FROM (public.catalogue_headings h
+     JOIN public.identifiers i ON ((i.id = h.record_id)))
+  WHERE ((i.res_kind <> 'manifestation'::text) OR (NOT (EXISTS ( SELECT 1
+           FROM (public.manifestation_expressions me
+             JOIN public.expressions e ON ((e.id = me.expression_id)))
+          WHERE ((me.manifestation_id = i.res_id) AND (e.work_id = h.work_id))))));
+
+
+--
 -- Name: qa_identifier_checksums; Type: VIEW; Schema: public; Owner: -
 --
 
@@ -1989,6 +2208,8 @@ CREATE VIEW public.qa_orphan_res AS
            FROM public.collectives x
           WHERE (x.id = r.id))))) OR ((kind = 'place'::text) AND (NOT (EXISTS ( SELECT 1
            FROM public.places x
+          WHERE (x.id = r.id))))) OR ((kind = 'concept'::text) AND (NOT (EXISTS ( SELECT 1
+           FROM public.concepts x
           WHERE (x.id = r.id))))));
 
 
@@ -2004,6 +2225,30 @@ CREATE VIEW public.qa_person_names_particle_undecided AS
     culture
    FROM public.person_names n
   WHERE ((particle IS NOT NULL) AND (heading_override IS NULL) AND (public.particle_in_entry(n.*) IS NULL));
+
+
+--
+-- Name: qa_unresolved_headings; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.qa_unresolved_headings AS
+ SELECT id,
+    work_id,
+    record_id,
+    function,
+    vocabulary,
+    tag,
+    indicators,
+    value,
+    subfields,
+    authority_uri,
+    "position",
+    rejected,
+    note
+   FROM public.catalogue_headings h
+  WHERE ((function <> 'classification'::text) AND (rejected IS NULL) AND (NOT (EXISTS ( SELECT 1
+           FROM public.heading_resolutions r
+          WHERE (r.heading_id = h.id)))));
 
 
 --
@@ -2202,6 +2447,44 @@ CREATE TABLE public.work_categories (
 
 
 --
+-- Name: work_genre_forms; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.work_genre_forms AS
+ SELECT h.work_id,
+    r.res_id,
+    r.res_kind,
+    array_agg(DISTINCT h.id ORDER BY h.id) AS heading_ids
+   FROM (public.catalogue_headings h
+     JOIN public.heading_resolutions r ON ((r.heading_id = h.id)))
+  WHERE (h.function = 'genre_form'::text)
+  GROUP BY h.work_id, r.res_id, r.res_kind;
+
+
+--
+-- Name: work_subjects; Type: VIEW; Schema: public; Owner: -
+--
+
+CREATE VIEW public.work_subjects AS
+ SELECT h.work_id,
+    r.res_id,
+    r.res_kind,
+    bool_or((r.certainty = 'certain'::text)) AS certain,
+    array_agg(DISTINCT h.id ORDER BY h.id) AS heading_ids
+   FROM (public.catalogue_headings h
+     JOIN public.heading_resolutions r ON ((r.heading_id = h.id)))
+  WHERE (h.function = ANY (ARRAY['subject'::text, 'keyword'::text]))
+  GROUP BY h.work_id, r.res_id, r.res_kind;
+
+
+--
+-- Name: VIEW work_subjects; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON VIEW public.work_subjects IS 'LRM-R12 work has as subject res, from resolved headings; certain = at least one heading resolves to it with certainty';
+
+
+--
 -- Name: agent_types agent_types_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2239,6 +2522,22 @@ ALTER TABLE ONLY public.bases
 
 ALTER TABLE ONLY public.cards
     ADD CONSTRAINT cards_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: catalogue_headings catalogue_headings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogue_headings
+    ADD CONSTRAINT catalogue_headings_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: catalogue_headings catalogue_headings_record_id_position_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogue_headings
+    ADD CONSTRAINT catalogue_headings_record_id_position_key UNIQUE (record_id, "position");
 
 
 --
@@ -2295,6 +2594,38 @@ ALTER TABLE ONLY public.collective_names
 
 ALTER TABLE ONLY public.collectives
     ADD CONSTRAINT collectives_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: concept_categories concept_categories_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concept_categories
+    ADD CONSTRAINT concept_categories_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: concept_names concept_names_concept_id_value_lang_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concept_names
+    ADD CONSTRAINT concept_names_concept_id_value_lang_key UNIQUE (concept_id, value, lang);
+
+
+--
+-- Name: concept_names concept_names_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concept_names
+    ADD CONSTRAINT concept_names_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: concepts concepts_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concepts
+    ADD CONSTRAINT concepts_pkey PRIMARY KEY (id);
 
 
 --
@@ -2383,6 +2714,30 @@ ALTER TABLE ONLY public.generational_labels
 
 ALTER TABLE ONLY public.generational_markers
     ADD CONSTRAINT generational_markers_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: heading_functions heading_functions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.heading_functions
+    ADD CONSTRAINT heading_functions_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: heading_resolutions heading_resolutions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.heading_resolutions
+    ADD CONSTRAINT heading_resolutions_pkey PRIMARY KEY (heading_id, res_id);
+
+
+--
+-- Name: heading_vocabularies heading_vocabularies_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.heading_vocabularies
+    ADD CONSTRAINT heading_vocabularies_pkey PRIMARY KEY (code);
 
 
 --
@@ -2840,6 +3195,13 @@ CREATE INDEX idx_cards_res ON public.cards USING btree (res_id);
 
 
 --
+-- Name: idx_catalogue_headings_work; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_catalogue_headings_work ON public.catalogue_headings USING btree (work_id);
+
+
+--
 -- Name: idx_citations_cited; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2875,6 +3237,13 @@ CREATE INDEX idx_collective_names_collective ON public.collective_names USING bt
 
 
 --
+-- Name: idx_concept_names_concept; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_concept_names_concept ON public.concept_names USING btree (concept_id);
+
+
+--
 -- Name: idx_contributions_agent; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2886,6 +3255,13 @@ CREATE INDEX idx_contributions_agent ON public.contributions USING btree (agent_
 --
 
 CREATE INDEX idx_expressions_work ON public.expressions USING btree (work_id);
+
+
+--
+-- Name: idx_heading_resolutions_res; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_heading_resolutions_res ON public.heading_resolutions USING btree (res_id);
 
 
 --
@@ -3015,6 +3391,13 @@ CREATE INDEX idx_titles_res ON public.titles USING btree (res_id);
 
 
 --
+-- Name: uq_concept_names_preferred; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_concept_names_preferred ON public.concept_names USING btree (concept_id, lang) WHERE is_preferred;
+
+
+--
 -- Name: uq_person_names_preferred; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3050,6 +3433,13 @@ CREATE TRIGGER collectives_res_delete AFTER DELETE ON public.collectives FOR EAC
 
 
 --
+-- Name: concepts concepts_res_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER concepts_res_delete AFTER DELETE ON public.concepts FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
 -- Name: documents documents_lo_sync; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3061,6 +3451,13 @@ CREATE TRIGGER documents_lo_sync AFTER INSERT OR DELETE OR UPDATE OF code ON pub
 --
 
 CREATE TRIGGER expressions_res_delete AFTER DELETE ON public.expressions FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: heading_resolutions heading_resolutions_check; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER heading_resolutions_check BEFORE INSERT OR UPDATE ON public.heading_resolutions FOR EACH ROW EXECUTE FUNCTION public.heading_resolution_check();
 
 
 --
@@ -3149,6 +3546,38 @@ ALTER TABLE ONLY public.cards
 
 ALTER TABLE ONLY public.cards
     ADD CONSTRAINT cards_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: catalogue_headings catalogue_headings_function_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogue_headings
+    ADD CONSTRAINT catalogue_headings_function_fkey FOREIGN KEY (function) REFERENCES public.heading_functions(code);
+
+
+--
+-- Name: catalogue_headings catalogue_headings_record_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogue_headings
+    ADD CONSTRAINT catalogue_headings_record_id_fkey FOREIGN KEY (record_id) REFERENCES public.identifiers(id) ON DELETE CASCADE;
+
+
+--
+-- Name: catalogue_headings catalogue_headings_vocabulary_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogue_headings
+    ADD CONSTRAINT catalogue_headings_vocabulary_fkey FOREIGN KEY (vocabulary) REFERENCES public.heading_vocabularies(code);
+
+
+--
+-- Name: catalogue_headings catalogue_headings_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.catalogue_headings
+    ADD CONSTRAINT catalogue_headings_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
 
 
 --
@@ -3285,6 +3714,38 @@ ALTER TABLE ONLY public.collectives
 
 ALTER TABLE ONLY public.collectives
     ADD CONSTRAINT collectives_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.collectives(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: concept_names concept_names_concept_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concept_names
+    ADD CONSTRAINT concept_names_concept_id_fkey FOREIGN KEY (concept_id) REFERENCES public.concepts(id) ON DELETE CASCADE;
+
+
+--
+-- Name: concept_names concept_names_lang_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concept_names
+    ADD CONSTRAINT concept_names_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: concepts concepts_category_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concepts
+    ADD CONSTRAINT concepts_category_fkey FOREIGN KEY (category) REFERENCES public.concept_categories(code);
+
+
+--
+-- Name: concepts concepts_id_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.concepts
+    ADD CONSTRAINT concepts_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
 
 
 --
@@ -3429,6 +3890,30 @@ ALTER TABLE ONLY public.generational_labels
 
 ALTER TABLE ONLY public.generational_labels
     ADD CONSTRAINT generational_labels_lang_fkey FOREIGN KEY (lang) REFERENCES public.languages(code);
+
+
+--
+-- Name: heading_resolutions heading_resolutions_certainty_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.heading_resolutions
+    ADD CONSTRAINT heading_resolutions_certainty_fkey FOREIGN KEY (certainty) REFERENCES public.certainties(code);
+
+
+--
+-- Name: heading_resolutions heading_resolutions_heading_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.heading_resolutions
+    ADD CONSTRAINT heading_resolutions_heading_id_fkey FOREIGN KEY (heading_id) REFERENCES public.catalogue_headings(id) ON DELETE CASCADE;
+
+
+--
+-- Name: heading_resolutions heading_resolutions_res_id_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.heading_resolutions
+    ADD CONSTRAINT heading_resolutions_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
 
 
 --
