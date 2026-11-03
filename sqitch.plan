@@ -16,3 +16,8 @@ catalogue_links [wemi_links] 2026-10-26T17:04:38Z Lev Z. Király <lev.z.kiraly@g
 legacy_mapping [catalogue_links] 2026-10-27T22:04:38Z Lev Z. Király <lev.z.kiraly@gmail.com> # Correspondence tables for the pre-LRM entries (legacy_map, legacy_person_map, legacy_migration_res); other_format_of relation type
 citation_names [agents] 2026-10-26T22:58:39Z Lev Z. Király <lev.z.kiraly@gmail.com> # person_names.citation_name: the name a person is cited by, where it differs from the entry element
 lo_bibliography [lo_bibliography@baseline citation_names legacy_mapping] 2026-10-26T22:58:39Z Lev Z. Király <lev.z.kiraly@gmail.com> # lo_bibliography over the four-level model, scoped to the migrated entries (interim project view); computed labels
+manuscript_description [catalogue_links] 2026-11-02T00:07:14Z Lev Z. Király <lev.z.kiraly@gmail.com> # Manuscript description vocabulary: language und, script Qaaa (Rohonc script), statement types dimensions and physical_details, identifier status former
+research_layer [wemi_links places] 2026-11-02T00:07:14Z Lev Z. Király <lev.z.kiraly@gmail.com> # Research layer: projects (subjects, members, sections), documents, citations with locators, notes, cards
+lo_views [research_layer lo_bibliography] 2026-11-02T00:07:15Z Lev Z. Király <lev.z.kiraly@gmail.com> # LibreOffice bibliography views per scope: lo_bibliography_rows(), lo_sync() and its triggers
+@research_layer 2026-11-02T00:07:15Z Lev Z. Király <lev.z.kiraly@gmail.com> # Research layer in place
+lo_bibliography [lo_bibliography@research_layer lo_views] 2026-11-02T00:07:16Z Lev Z. Király <lev.z.kiraly@gmail.com> # lo_bibliography as the global LibreOffice view over lo_bibliography_rows(); no longer reads legacy_map or the legacy tags

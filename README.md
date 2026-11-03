@@ -36,6 +36,10 @@ in database backups, never here.
 | `legacy_mapping` | Correspondence tables for carrying the pre-LRM entries into the four-level model (`legacy_map`, `legacy_person_map`, `legacy_migration_res`); `other_format_of`, the work-to-work relation of print and online serials; the legacy tables stay |
 | `citation_names` | `person_names.citation_name`: the name used in labels when it differs from the entry element |
 | `lo_bibliography` (reworked) | The LibreOffice view over the four-level model, scoped to the migrated entries (interim project view); labels computed: names (up to four, else "First et al."), year, suffix only within the view, ordered by title with multipart works as blocks |
+| `manuscript_description` | Vocabulary for describing manuscripts as their catalogues do: language `und`, script `Qaaa` (the Rohonc script; ISO 15924 private use), statement types `dimensions` and `physical_details`, identifier status `former` |
+| `research_layer` | What is ours rather than the catalogue's: projects with subjects (any res), members (any WEMI level) and sections; documents (own writings: a work and the expression being written); citations with locators on both sides; notes and cards |
+| `lo_views` | `lo_bibliography_rows(scope, id)`: the LibreOffice columns for the global scope, a project or a document, labels computed within the scope; `lo_sync()` and its triggers generate `lo_project_<code>` and `lo_document_<code>` |
+| `lo_bibliography` (reworked again, after `@research_layer`) | The global LibreOffice view: every entry of any project or document; Custom3 lists the projects |
 
 A second target, `dev` (`libroyal_dev`), is configured for trying changes before they
 reach the live database: `sqitch deploy --verify dev`.
@@ -47,6 +51,21 @@ scripts were recorded as deployed without being run against it.
 change here: such scripts are kept with the backups (`.backup/seed/`, not tracked)
 and run once with `psql -v ON_ERROR_STOP=1 -f <script>` after the structure they
 need is deployed.
+
+## LibreOffice
+
+LibreOffice reads one bibliography source at a time, chosen for the whole
+application (*Tools › Bibliography Database › Data Source*), and copies every
+inserted entry into the document. So the views can exist side by side: before
+inserting into a paper, choose its view — `lo_document_<code>` (what the paper
+cites), `lo_project_<code>` (what the project collects) or `lo_bibliography`
+(everything). Documents written from another view keep their entries.
+
+The per-scope views follow the `projects` and `documents` rows (triggers call
+`lo_sync()`); they are not in the plan, and `tools/snapshot.sh` leaves them out.
+After restoring a dump, run `SELECT lo_sync();` if any are missing. Renaming a
+project or document code renames its view, and the data source has to be chosen
+again.
 
 ## Password
 

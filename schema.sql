@@ -148,6 +148,284 @@ END $$;
 
 
 --
+-- Name: lo_bibliography_rows(text, bigint); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.lo_bibliography_rows(p_scope text, p_id bigint DEFAULT NULL::bigint) RETURNS TABLE(manifestation_id bigint, "Identifier" text, "BibliographyType" integer, "Author" text, "Editor" text, "Title" text, "Subtitle" text, "Year" text, "Publisher" text, "Address" text, "Journal" text, "Volume" text, "Number" text, "Pages" text, "ISBN" text, "URL" text, "Custom1" text, "Custom2" text, "Custom3" text, "Note" text, "Annote" text, "Booktitle" text, "Chapter" text, "Edition" text, "Howpublished" text, "Institution" text, "Month" text, "Organizations" text, "School" text, "Series" text, "ReportType" text, "Custom4" text, "Custom5" text, "LocalURL" text)
+    LANGUAGE sql STABLE
+    AS $_$
+    WITH RECURSIVE
+    scoped AS (     -- manifestations per scope (an item counts as its manifestation)
+        SELECT coalesce(i.manifestation_id, pm.res_id) AS m, pm.project_id, NULL::bigint AS document_id
+          FROM public.project_members pm
+          LEFT JOIN public.items i ON i.id = pm.res_id AND pm.res_kind = 'item'
+         WHERE pm.res_kind IN ('manifestation', 'item')
+        UNION
+        SELECT coalesce(i.manifestation_id, ct.cited_id), NULL, d.work_id
+          FROM public.documents d
+          JOIN public.citations ct ON ct.citing_expression_id = d.expression_id
+          LEFT JOIN public.items i ON i.id = ct.cited_id AND ct.cited_kind = 'item'
+    ),
+    cited AS (      -- k: the cited manifestation, the key of the row
+        SELECT DISTINCT s.m AS k, s.m AS m, me.expression_id AS e, ex.work_id AS w
+          FROM scoped s
+          JOIN LATERAL (SELECT x.expression_id FROM public.manifestation_expressions x
+                         WHERE x.manifestation_id = s.m ORDER BY x.position, x.expression_id LIMIT 1) me ON true
+          JOIN public.expressions ex ON ex.id = me.expression_id
+         WHERE p_scope = 'global'
+            OR (p_scope = 'project'  AND s.project_id  = p_id)
+            OR (p_scope = 'document' AND s.document_id = p_id)
+    ),
+    -- the cited manifestation and every host it is part of
+    up AS (
+        SELECT c.k, c.m AS m, 0 AS depth FROM cited c
+        UNION ALL
+        SELECT up.k, r.from_id, up.depth + 1
+          FROM up JOIN public.relations r ON r.to_id = up.m AND r.type = 'manifestation_has_part'
+    ),
+    pub AS (
+        SELECT DISTINCT ON (up.k) up.k, i.id AS imprint_id, i.date_text, i.date_sort
+          FROM up JOIN public.imprints i ON i.manifestation_id = up.m AND i.function = 'publication'
+         ORDER BY up.k, up.depth, i.position
+    ),
+    host AS (       -- direct host: issue, volume set, or the volume a chapter is in
+        SELECT c.k, r.from_id AS m, r.locator, hm.category
+          FROM cited c
+          JOIN public.relations r ON r.to_id = c.m AND r.type = 'manifestation_has_part'
+          JOIN public.manifestations hm ON hm.id = r.from_id
+    ),
+    serial AS (     -- the serial at the top of the chain
+        SELECT DISTINCT ON (up.k) up.k, up.m
+          FROM up JOIN public.manifestations sm ON sm.id = up.m AND sm.category = 'serial_whole'
+         ORDER BY up.k, up.depth DESC
+    ),
+    mtitle AS (
+        SELECT t.res_id, t.value, t.subtitle
+          FROM public.titles t WHERE t.title_type = 'title_proper' AND t.derived_from IS NULL AND t.position = 1
+    ),
+    pname AS (      -- one preferred Latin-script name per person
+        SELECT DISTINCT ON (n.person_id) n.person_id,
+               coalesce(n.citation_name, public.person_name_entry(n)) AS key_name,
+               CASE WHEN n.entry = 'given' THEN public.person_name_display(n, 'en')
+                    ELSE public.person_name_entry(n) || coalesce(', ' || public.person_name_rest(n), '') END AS full_name
+          FROM public.person_names n
+         WHERE n.name_type = 'preferred' AND n.script = 'Latn'
+         ORDER BY n.person_id, n.derived_from NULLS FIRST
+    ),
+    people AS (     -- authors / editors / translators per cited entry
+        SELECT c.k, ct.role, ct.position, p.key_name, p.full_name
+          FROM cited c
+          JOIN public.contributions ct ON
+               (ct.role = 'author' AND ct.res_id = c.w)
+            OR (ct.role IN ('editor', 'translator') AND (ct.res_id = c.e OR ct.res_id IN (
+                   SELECT r.to_id FROM public.relations r
+                    WHERE r.from_id = c.e AND r.type IN ('aggregated_by', 'edition_of'))))
+          JOIN pname p ON p.person_id = ct.agent_id
+    ),
+    names AS (
+        SELECT k,
+               string_agg(full_name, '; ' ORDER BY position) FILTER (WHERE role = 'author')     AS authors,
+               string_agg(full_name, '; ' ORDER BY position) FILTER (WHERE role = 'editor')     AS editors,
+               string_agg(full_name, '; ' ORDER BY position) FILTER (WHERE role = 'translator') AS translators,
+               array_agg(key_name ORDER BY position) FILTER (WHERE role = 'author')             AS author_keys,
+               array_agg(key_name ORDER BY position) FILTER (WHERE role = 'editor')             AS editor_keys
+          FROM people GROUP BY k
+    ),
+    base AS (
+        SELECT c.k,
+               c.w, c.m,
+               CASE
+                   WHEN m.category = 'component' AND s.m IS NOT NULL THEN 'article'
+                   WHEN m.category = 'component' THEN 'incollection'
+                   WHEN wk.category = 'online_resource' THEN 'misc'
+                   ELSE 'book' END AS type,
+               n.authors, n.editors, n.translators,
+               coalesce(n.author_keys, n.editor_keys) AS keys,
+               -- a volume of a set is cited under the set's title; its own (part)
+               -- title goes with the volume number
+               CASE WHEN h.category = 'set' THEN (SELECT x.value    FROM mtitle x WHERE x.res_id = h.m) ELSE t.value    END AS title_value,
+               CASE WHEN h.category = 'set' THEN (SELECT x.subtitle FROM mtitle x WHERE x.res_id = h.m) ELSE t.subtitle END AS subtitle,
+               CASE WHEN h.category = 'set' THEN h.locator || coalesce(', ' || t.value || coalesce(': ' || t.subtitle, ''), '') END AS volume_label,
+               coalesce(pub.date_sort::text, pub.date_text) AS year,
+               (SELECT string_agg(cn.value, ' – ' ORDER BY ia.position)
+                  FROM public.imprint_agents ia
+                  JOIN public.collective_names cn ON cn.collective_id = ia.agent_id AND cn.name_type = 'preferred'
+                 WHERE ia.imprint_id = pub.imprint_id) AS publisher,
+               (SELECT string_agg(pn.value, '–' ORDER BY ip.position)
+                  FROM public.imprint_places ip
+                  JOIN public.place_names pn ON pn.place_id = ip.place_id AND pn.is_preferred
+                 WHERE ip.imprint_id = pub.imprint_id) AS place,
+               st.value AS journal,
+               -- the issue's own place in the serial ("42/4"), not the article's place in the issue
+               CASE WHEN h.category = 'issue' THEN (SELECT r.locator FROM public.relations r
+                                                      WHERE r.to_id = h.m AND r.type = 'manifestation_has_part' LIMIT 1) END AS issue_locator,
+               CASE WHEN m.category = 'component' THEN h.locator
+                    ELSE substring(m.extent FROM '^pp\. (.+)$') END AS pages,
+               CASE WHEN m.category = 'component' AND s.m IS NULL THEN
+                    (SELECT ht.value || coalesce(': ' || ht.subtitle, '') FROM mtitle ht WHERE ht.res_id = h.m) END AS booktitle,
+               (SELECT x.value FROM public.identifiers x WHERE x.res_id = c.m AND x.scheme = 'isbn' ORDER BY x.id LIMIT 1) AS isbn,
+               (SELECT 'doi:' || x.value FROM public.identifiers x
+                 WHERE x.res_id IN (c.e, c.w, c.m) AND x.scheme = 'doi' ORDER BY x.id LIMIT 1) AS doi,
+               (SELECT i.url FROM public.items i
+                 WHERE i.url IS NOT NULL AND (i.manifestation_id = c.m OR i.manifestation_id IN (
+                       SELECT r.from_id FROM public.relations r WHERE r.to_id = c.m AND r.type IN ('reproduction_of', 'alternate_of')
+                       UNION SELECT r.to_id FROM public.relations r WHERE r.from_id = c.m AND r.type = 'alternate_of'))
+                 ORDER BY i.id LIMIT 1) AS url,
+               (SELECT i.path FROM public.items i WHERE i.manifestation_id = c.m AND i.path IS NOT NULL ORDER BY i.id LIMIT 1) AS local_path,
+               (SELECT ms.value FROM public.manifestation_statements ms
+                 WHERE ms.manifestation_id = c.m AND ms.statement_type = 'edition' AND ms.derived_from IS NULL
+                 ORDER BY ms.position LIMIT 1) AS edition,
+               (SELECT wt.value FROM public.relations r
+                  JOIN public.titles wt ON wt.res_id = r.to_id AND wt.title_type = 'preferred'
+                 WHERE r.from_id = c.m AND r.type = 'in_series' ORDER BY r.id LIMIT 1) AS series_name,
+               (SELECT r.locator FROM public.relations r
+                 WHERE r.from_id = c.m AND r.type = 'in_series' ORDER BY r.id LIMIT 1) AS series_number,
+               m.note,
+               (SELECT string_agg(DISTINCT p.name, '; ')
+                  FROM public.project_members pm JOIN public.projects p ON p.id = pm.project_id
+                 WHERE pm.res_id = c.m OR pm.res_id IN (SELECT i.id FROM public.items i WHERE i.manifestation_id = c.m)) AS projects,
+               -- ordering inside a label group: block title (whole of a multipart work) and part order
+               coalesce((SELECT pt.value FROM public.relations r
+                           JOIN public.works pw ON pw.id = r.from_id AND pw.category = 'multipart'
+                           JOIN public.titles pt ON pt.res_id = pw.id AND pt.title_type = 'preferred'
+                          WHERE r.to_id = c.w AND r.type = 'work_has_part' LIMIT 1), t.value) AS block_title,
+               (SELECT r.locator FROM public.relations r
+                 WHERE r.to_id = c.w AND r.type = 'work_has_part' LIMIT 1) AS part_locator,
+               pub.date_text AS date_full
+          FROM cited c
+          JOIN public.manifestations m ON m.id = c.m
+          JOIN public.works wk ON wk.id = c.w
+          LEFT JOIN names n ON n.k = c.k
+          LEFT JOIN mtitle t ON t.res_id = c.m
+          LEFT JOIN pub ON pub.k = c.k
+          LEFT JOIN host h ON h.k = c.k
+          LEFT JOIN serial s ON s.k = c.k
+          LEFT JOIN mtitle st ON st.res_id = s.m
+    ),
+    labelled AS (
+        SELECT b.*,
+               coalesce(CASE WHEN cardinality(b.keys) >= 5 THEN b.keys[1] || ' et al.'
+                             ELSE array_to_string(b.keys, '–') END, '[no-author]')
+               || ' ' || coalesce(b.year, '[no-year]') AS label0
+          FROM base b
+    ),
+    keyed AS (
+        SELECT l.*,
+               l.label0 || CASE WHEN count(*) OVER (PARTITION BY l.label0) > 1
+                   THEN chr(96 + row_number() OVER (
+                        PARTITION BY l.label0
+                        ORDER BY regexp_replace(l.block_title, '^(a|az|the|an?|der|die|das|le|la|les|l''|il|lo|el)\s+', '', 'i') COLLATE "hu-HU-x-icu",
+                                 l.date_full, l.part_locator,
+                                 regexp_replace(l.title_value, '^(a|az|the|an?|der|die|das|le|la|les|l''|il|lo|el)\s+', '', 'i') COLLATE "hu-HU-x-icu",
+                                 l.k)::int)
+                   ELSE '' END AS label
+          FROM labelled l
+    )
+    SELECT k AS manifestation_id,
+           label AS "Identifier",
+           CASE type WHEN 'article' THEN 0 WHEN 'book' THEN 1 WHEN 'incollection' THEN 5 WHEN 'misc' THEN 10 END AS "BibliographyType",
+           authors AS "Author",
+           editors AS "Editor",
+           title_value || coalesce(': ' || subtitle, '') AS "Title",
+           subtitle AS "Subtitle",
+           year AS "Year",
+           publisher AS "Publisher",
+           place AS "Address",
+           journal AS "Journal",
+           coalesce(volume_label, CASE WHEN issue_locator ~ ', ' THEN split_part(issue_locator, ', ', 1)
+                                        WHEN issue_locator ~ '/' THEN split_part(issue_locator, '/', 1) END) AS "Volume",
+           coalesce(CASE WHEN issue_locator ~ ', ' THEN substring(issue_locator FROM ', (.*)$')
+                         WHEN issue_locator ~ '/' THEN substring(issue_locator FROM '/(.*)$')
+                         ELSE issue_locator END, series_number) AS "Number",
+           pages AS "Pages",
+           isbn AS "ISBN",
+           url AS "URL",
+           doi AS "Custom1",
+           translators AS "Custom2",
+           projects AS "Custom3",
+           note AS "Note",
+           NULL::text AS "Annote",
+           booktitle AS "Booktitle",
+           NULL::text AS "Chapter",
+           edition AS "Edition",
+           NULL::text AS "Howpublished",
+           NULL::text AS "Institution",
+           NULL::text AS "Month",
+           NULL::text AS "Organizations",
+           NULL::text AS "School",
+           series_name AS "Series",
+           NULL::text AS "ReportType",
+           NULL::text AS "Custom4",
+           NULL::text AS "Custom5",
+           local_path AS "LocalURL"
+      FROM keyed;
+$_$;
+
+
+--
+-- Name: FUNCTION lo_bibliography_rows(p_scope text, p_id bigint); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.lo_bibliography_rows(p_scope text, p_id bigint) IS 'LibreOffice bibliography rows of a scope: global, project (projects.id), document (documents.work_id)';
+
+
+--
+-- Name: lo_sync(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.lo_sync() RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+    r record;
+    v_cols constant text := '"Identifier", "BibliographyType", "Author", "Editor", "Title", "Subtitle", "Year", "Publisher", "Address", "Journal", "Volume", "Number", "Pages", "ISBN", "URL", "Custom1", "Custom2", "Custom3", "Note", "Annote", "Booktitle", "Chapter", "Edition", "Howpublished", "Institution", "Month", "Organizations", "School", "Series", "ReportType", "Custom4", "Custom5", "LocalURL"';
+BEGIN
+    -- drop generated views whose project or document is gone (or renamed)
+    FOR r IN
+        SELECT c.relname
+          FROM pg_class c
+          JOIN pg_description d ON d.objoid = c.oid AND d.classoid = 'pg_class'::regclass AND d.objsubid = 0
+         WHERE c.relkind = 'v' AND c.relnamespace = 'public'::regnamespace
+           AND d.description LIKE 'generated by lo_sync()%'
+           AND c.relname NOT IN (SELECT 'lo_project_' || code FROM public.projects
+                                 UNION ALL SELECT 'lo_document_' || code FROM public.documents)
+    LOOP
+        EXECUTE format('DROP VIEW public.%I', r.relname);
+    END LOOP;
+    FOR r IN
+        SELECT 'lo_project_' || code AS view_name, 'project' AS scope, id FROM public.projects
+        UNION ALL
+        SELECT 'lo_document_' || code, 'document', work_id FROM public.documents
+    LOOP
+        EXECUTE format('CREATE OR REPLACE VIEW public.%I AS SELECT %s FROM public.lo_bibliography_rows(%L, %s)',
+                       r.view_name, v_cols, r.scope, r.id);
+        EXECUTE format('COMMENT ON VIEW public.%I IS %L', r.view_name,
+                       format('generated by lo_sync() for %s %s', r.scope, r.id));
+    END LOOP;
+END $$;
+
+
+--
+-- Name: FUNCTION lo_sync(); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.lo_sync() IS 'create/drop the LibreOffice views lo_project_<code> and lo_document_<code>';
+
+
+--
+-- Name: lo_sync_trigger(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.lo_sync_trigger() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    PERFORM public.lo_sync();
+    RETURN NULL;
+END $$;
+
+
+--
 -- Name: new_agent(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -373,6 +651,19 @@ END $$;
 
 
 --
+-- Name: touch_updated_at(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.touch_updated_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END $$;
+
+
+--
 -- Name: agent_types; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -410,6 +701,45 @@ CREATE TABLE public.bases (
 
 
 --
+-- Name: cards; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.cards (
+    id bigint NOT NULL,
+    project_id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    locator text,
+    title text NOT NULL,
+    body text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT cards_res_kind_check CHECK ((res_kind = ANY (ARRAY['work'::text, 'expression'::text, 'manifestation'::text, 'item'::text])))
+);
+
+
+--
+-- Name: TABLE cards; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.cards IS 'titled texts of a project about one entry, at a locator (e.g. "f. 223v"); several cards per entry';
+
+
+--
+-- Name: cards_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.cards ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.cards_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: certainties; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -418,6 +748,91 @@ CREATE TABLE public.certainties (
     label_en text NOT NULL,
     label_hu text,
     isbd_mark text
+);
+
+
+--
+-- Name: citations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.citations (
+    id bigint NOT NULL,
+    citing_expression_id bigint NOT NULL,
+    citing_manifestation_id bigint,
+    citing_locator text,
+    citing_note text,
+    citing_note_locator text,
+    cited_id bigint NOT NULL,
+    cited_kind text NOT NULL,
+    cited_locator text,
+    "position" integer,
+    basis text,
+    note text,
+    CONSTRAINT citations_cited_kind_check CHECK ((cited_kind = ANY (ARRAY['manifestation'::text, 'item'::text]))),
+    CONSTRAINT citations_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: TABLE citations; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.citations IS 'a text citing a manifestation or item; one row per citation (a pair may recur in several notes)';
+
+
+--
+-- Name: COLUMN citations.citing_manifestation_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.citations.citing_manifestation_id IS 'the manifestation whose pagination the citing locators refer to; NULL for an unpublished text';
+
+
+--
+-- Name: COLUMN citations.citing_locator; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.citations.citing_locator IS 'where the reference stands, e.g. "p. 191"';
+
+
+--
+-- Name: COLUMN citations.citing_note; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.citations.citing_note IS 'the note carrying the reference, e.g. "n. 8"';
+
+
+--
+-- Name: COLUMN citations.citing_note_locator; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.citations.citing_note_locator IS 'where the note itself stands, e.g. "p. 195" (endnotes)';
+
+
+--
+-- Name: COLUMN citations.cited_locator; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.citations.cited_locator IS 'the part of the cited entry referred to, e.g. "esp. 15, 18–19"';
+
+
+--
+-- Name: COLUMN citations."position"; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.citations."position" IS 'order among the references of the same note or place';
+
+
+--
+-- Name: citations_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.citations ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.citations_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -575,6 +990,40 @@ CREATE TABLE public.conversion_schemes (
     note text,
     CONSTRAINT conversion_schemes_check CHECK ((source_script <> target_script))
 );
+
+
+--
+-- Name: document_statuses; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.document_statuses (
+    code text NOT NULL,
+    label_en text NOT NULL,
+    label_hu text NOT NULL,
+    "position" integer NOT NULL
+);
+
+
+--
+-- Name: documents; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.documents (
+    work_id bigint NOT NULL,
+    expression_id bigint NOT NULL,
+    project_id bigint NOT NULL,
+    code text NOT NULL,
+    status text DEFAULT 'draft'::text NOT NULL,
+    note text,
+    CONSTRAINT documents_code_check CHECK ((code ~ '^[a-z][a-z0-9_]{0,39}$'::text))
+);
+
+
+--
+-- Name: TABLE documents; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.documents IS 'own writings: the work, the expression being written (whose citations make its bibliography), project and status; code names the generated LibreOffice view (lo_document_<code>)';
 
 
 --
@@ -1087,482 +1536,44 @@ ALTER SEQUENCE public.legacy_works_id_seq OWNED BY public.legacy_works.id;
 
 
 --
--- Name: manifestation_statements; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.manifestation_statements (
-    id bigint NOT NULL,
-    manifestation_id bigint NOT NULL,
-    statement_type text NOT NULL,
-    source text,
-    value text NOT NULL,
-    lang text,
-    script text DEFAULT 'Latn'::text NOT NULL,
-    derived_from bigint,
-    conversion_scheme text,
-    basis text DEFAULT 'transcribed'::text NOT NULL,
-    certainty text DEFAULT 'certain'::text NOT NULL,
-    "position" integer DEFAULT 1 NOT NULL,
-    note text,
-    CONSTRAINT manifestation_statements_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
-    CONSTRAINT manifestation_statements_position_check CHECK (("position" > 0))
-);
-
-
---
--- Name: manifestations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.manifestations (
-    id bigint DEFAULT public.new_res('manifestation'::text) NOT NULL,
-    kind text DEFAULT 'manifestation'::text NOT NULL,
-    category text NOT NULL,
-    extent text,
-    note text,
-    CONSTRAINT manifestations_kind_check CHECK ((kind = 'manifestation'::text))
-);
-
-
---
--- Name: place_names; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.place_names (
-    id bigint NOT NULL,
-    place_id bigint NOT NULL,
-    name_type text DEFAULT 'official'::text NOT NULL,
-    value text NOT NULL,
-    is_preferred boolean DEFAULT false NOT NULL,
-    valid_from_year integer,
-    valid_to_year integer,
-    lang text,
-    script text DEFAULT 'Latn'::text NOT NULL,
-    derived_from bigint,
-    conversion_scheme text,
-    basis text,
-    certainty text DEFAULT 'certain'::text NOT NULL,
-    reference_source text,
-    note text,
-    CONSTRAINT place_names_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
-    CONSTRAINT place_names_check1 CHECK ((valid_to_year >= valid_from_year))
-);
-
-
---
--- Name: relations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.relations (
-    id bigint NOT NULL,
-    type text NOT NULL,
-    from_id bigint NOT NULL,
-    from_kind text NOT NULL,
-    to_id bigint NOT NULL,
-    to_kind text NOT NULL,
-    locator text,
-    "position" integer,
-    basis text,
-    certainty text DEFAULT 'certain'::text NOT NULL,
-    note text,
-    CONSTRAINT relations_check CHECK ((from_id <> to_id)),
-    CONSTRAINT relations_position_check CHECK (("position" > 0))
-);
-
-
---
--- Name: titles; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.titles (
-    id bigint NOT NULL,
-    res_id bigint NOT NULL,
-    res_kind text NOT NULL,
-    title_type text NOT NULL,
-    source text,
-    value text NOT NULL,
-    subtitle text,
-    lang text,
-    script text DEFAULT 'Latn'::text NOT NULL,
-    derived_from bigint,
-    conversion_scheme text,
-    basis text,
-    certainty text DEFAULT 'certain'::text NOT NULL,
-    "position" integer DEFAULT 1 NOT NULL,
-    note text,
-    CONSTRAINT titles_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
-    CONSTRAINT titles_position_check CHECK (("position" > 0)),
-    CONSTRAINT titles_res_kind_check CHECK ((res_kind = ANY (ARRAY['work'::text, 'expression'::text, 'manifestation'::text])))
-);
-
-
---
--- Name: COLUMN titles.source; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.titles.source IS 'for manifestations: where the title was transcribed from';
-
-
---
--- Name: works; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.works (
-    id bigint DEFAULT public.new_res('work'::text) NOT NULL,
-    kind text DEFAULT 'work'::text NOT NULL,
-    category text NOT NULL,
-    date_text text,
-    date_sort integer,
-    date_sort_end integer,
-    note text,
-    CONSTRAINT works_check CHECK ((date_sort_end >= date_sort)),
-    CONSTRAINT works_kind_check CHECK ((kind = 'work'::text))
-);
-
-
---
--- Name: COLUMN works.date_text; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.works.date_text IS 'date of the work (of its creation) as to be displayed';
-
-
---
--- Name: COLUMN works.date_sort; Type: COMMENT; Schema: public; Owner: -
---
-
-COMMENT ON COLUMN public.works.date_sort IS 'first year, for sorting and filtering';
-
-
---
 -- Name: lo_bibliography; Type: VIEW; Schema: public; Owner: -
 --
 
 CREATE VIEW public.lo_bibliography AS
- WITH RECURSIVE cited AS (
-         SELECT lm.legacy_id,
-            lm.work_id AS w,
-            lm.expression_id AS e,
-            lm.manifestation_id AS m
-           FROM public.legacy_map lm
-        ), up AS (
-         SELECT c.legacy_id,
-            c.m,
-            0 AS depth
-           FROM cited c
-        UNION ALL
-         SELECT up.legacy_id,
-            r.from_id,
-            (up.depth + 1)
-           FROM (up
-             JOIN public.relations r ON (((r.to_id = up.m) AND (r.type = 'manifestation_has_part'::text))))
-        ), pub AS (
-         SELECT DISTINCT ON (up.legacy_id) up.legacy_id,
-            i.id AS imprint_id,
-            i.date_text,
-            i.date_sort
-           FROM (up
-             JOIN public.imprints i ON (((i.manifestation_id = up.m) AND (i.function = 'publication'::text))))
-          ORDER BY up.legacy_id, up.depth, i."position"
-        ), host AS (
-         SELECT c.legacy_id,
-            r.from_id AS m,
-            r.locator,
-            hm.category
-           FROM ((cited c
-             JOIN public.relations r ON (((r.to_id = c.m) AND (r.type = 'manifestation_has_part'::text))))
-             JOIN public.manifestations hm ON ((hm.id = r.from_id)))
-        ), serial AS (
-         SELECT DISTINCT ON (up.legacy_id) up.legacy_id,
-            up.m
-           FROM (up
-             JOIN public.manifestations sm ON (((sm.id = up.m) AND (sm.category = 'serial_whole'::text))))
-          ORDER BY up.legacy_id, up.depth DESC
-        ), mtitle AS (
-         SELECT t.res_id,
-            t.value,
-            t.subtitle
-           FROM public.titles t
-          WHERE ((t.title_type = 'title_proper'::text) AND (t.derived_from IS NULL) AND (t."position" = 1))
-        ), pname AS (
-         SELECT DISTINCT ON (n.person_id) n.person_id,
-            COALESCE(n.citation_name, public.person_name_entry(n.*)) AS key_name,
-                CASE
-                    WHEN (n.entry = 'given'::text) THEN public.person_name_display(n.*, 'en'::text)
-                    ELSE (public.person_name_entry(n.*) || COALESCE((', '::text || public.person_name_rest(n.*)), ''::text))
-                END AS full_name
-           FROM public.person_names n
-          WHERE ((n.name_type = 'preferred'::text) AND (n.script = 'Latn'::text))
-          ORDER BY n.person_id, n.derived_from NULLS FIRST
-        ), people AS (
-         SELECT c.legacy_id,
-            ct.role,
-            ct."position",
-            p.key_name,
-            p.full_name
-           FROM ((cited c
-             JOIN public.contributions ct ON ((((ct.role = 'author'::text) AND (ct.res_id = c.w)) OR ((ct.role = ANY (ARRAY['editor'::text, 'translator'::text])) AND ((ct.res_id = c.e) OR (ct.res_id IN ( SELECT r.to_id
-                   FROM public.relations r
-                  WHERE ((r.from_id = c.e) AND (r.type = ANY (ARRAY['aggregated_by'::text, 'edition_of'::text]))))))))))
-             JOIN pname p ON ((p.person_id = ct.agent_id)))
-        ), names AS (
-         SELECT people.legacy_id,
-            string_agg(people.full_name, '; '::text ORDER BY people."position") FILTER (WHERE (people.role = 'author'::text)) AS authors,
-            string_agg(people.full_name, '; '::text ORDER BY people."position") FILTER (WHERE (people.role = 'editor'::text)) AS editors,
-            string_agg(people.full_name, '; '::text ORDER BY people."position") FILTER (WHERE (people.role = 'translator'::text)) AS translators,
-            array_agg(people.key_name ORDER BY people."position") FILTER (WHERE (people.role = 'author'::text)) AS author_keys,
-            array_agg(people.key_name ORDER BY people."position") FILTER (WHERE (people.role = 'editor'::text)) AS editor_keys
-           FROM people
-          GROUP BY people.legacy_id
-        ), base AS (
-         SELECT c.legacy_id,
-            c.w,
-            c.m,
-                CASE
-                    WHEN ((m.category = 'component'::text) AND (s.m IS NOT NULL)) THEN 'article'::text
-                    WHEN (m.category = 'component'::text) THEN 'incollection'::text
-                    WHEN (wk.category = 'online_resource'::text) THEN 'misc'::text
-                    ELSE 'book'::text
-                END AS type,
-            n.authors,
-            n.editors,
-            n.translators,
-            COALESCE(n.author_keys, n.editor_keys) AS keys,
-                CASE
-                    WHEN (h.category = 'set'::text) THEN ( SELECT x.value
-                       FROM mtitle x
-                      WHERE (x.res_id = h.m))
-                    ELSE t.value
-                END AS title_value,
-                CASE
-                    WHEN (h.category = 'set'::text) THEN ( SELECT x.subtitle
-                       FROM mtitle x
-                      WHERE (x.res_id = h.m))
-                    ELSE t.subtitle
-                END AS subtitle,
-                CASE
-                    WHEN (h.category = 'set'::text) THEN (h.locator || COALESCE(((', '::text || t.value) || COALESCE((': '::text || t.subtitle), ''::text)), ''::text))
-                    ELSE NULL::text
-                END AS volume_label,
-            COALESCE((pub.date_sort)::text, pub.date_text) AS year,
-            ( SELECT string_agg(cn.value, ' – '::text ORDER BY ia."position") AS string_agg
-                   FROM (public.imprint_agents ia
-                     JOIN public.collective_names cn ON (((cn.collective_id = ia.agent_id) AND (cn.name_type = 'preferred'::text))))
-                  WHERE (ia.imprint_id = pub.imprint_id)) AS publisher,
-            ( SELECT string_agg(pn.value, '–'::text ORDER BY ip."position") AS string_agg
-                   FROM (public.imprint_places ip
-                     JOIN public.place_names pn ON (((pn.place_id = ip.place_id) AND pn.is_preferred)))
-                  WHERE (ip.imprint_id = pub.imprint_id)) AS place,
-            st.value AS journal,
-                CASE
-                    WHEN (h.category = 'issue'::text) THEN ( SELECT r.locator
-                       FROM public.relations r
-                      WHERE ((r.to_id = h.m) AND (r.type = 'manifestation_has_part'::text))
-                     LIMIT 1)
-                    ELSE NULL::text
-                END AS issue_locator,
-                CASE
-                    WHEN (m.category = 'component'::text) THEN h.locator
-                    ELSE "substring"(m.extent, '^pp\. (.+)$'::text)
-                END AS pages,
-                CASE
-                    WHEN ((m.category = 'component'::text) AND (s.m IS NULL)) THEN ( SELECT (ht.value || COALESCE((': '::text || ht.subtitle), ''::text))
-                       FROM mtitle ht
-                      WHERE (ht.res_id = h.m))
-                    ELSE NULL::text
-                END AS booktitle,
-            ( SELECT x.value
-                   FROM public.identifiers x
-                  WHERE ((x.res_id = c.m) AND (x.scheme = 'isbn'::text))
-                  ORDER BY x.id
-                 LIMIT 1) AS isbn,
-            ( SELECT ('doi:'::text || x.value)
-                   FROM public.identifiers x
-                  WHERE ((x.res_id = ANY (ARRAY[c.e, c.w, c.m])) AND (x.scheme = 'doi'::text))
-                  ORDER BY x.id
-                 LIMIT 1) AS doi,
-            ( SELECT i.url
-                   FROM public.items i
-                  WHERE ((i.url IS NOT NULL) AND ((i.manifestation_id = c.m) OR (i.manifestation_id IN ( SELECT r.from_id
-                           FROM public.relations r
-                          WHERE ((r.to_id = c.m) AND (r.type = ANY (ARRAY['reproduction_of'::text, 'alternate_of'::text])))
-                        UNION
-                         SELECT r.to_id
-                           FROM public.relations r
-                          WHERE ((r.from_id = c.m) AND (r.type = 'alternate_of'::text))))))
-                  ORDER BY i.id
-                 LIMIT 1) AS url,
-            ( SELECT i.path
-                   FROM public.items i
-                  WHERE ((i.manifestation_id = c.m) AND (i.path IS NOT NULL))
-                  ORDER BY i.id
-                 LIMIT 1) AS local_path,
-            ( SELECT ms.value
-                   FROM public.manifestation_statements ms
-                  WHERE ((ms.manifestation_id = c.m) AND (ms.statement_type = 'edition'::text) AND (ms.derived_from IS NULL))
-                  ORDER BY ms."position"
-                 LIMIT 1) AS edition,
-            ( SELECT wt.value
-                   FROM (public.relations r
-                     JOIN public.titles wt ON (((wt.res_id = r.to_id) AND (wt.title_type = 'preferred'::text))))
-                  WHERE ((r.from_id = c.m) AND (r.type = 'in_series'::text))
-                  ORDER BY r.id
-                 LIMIT 1) AS series_name,
-            ( SELECT r.locator
-                   FROM public.relations r
-                  WHERE ((r.from_id = c.m) AND (r.type = 'in_series'::text))
-                  ORDER BY r.id
-                 LIMIT 1) AS series_number,
-            m.note,
-            ( SELECT string_agg(tg.name, '; '::text ORDER BY tg.name) AS string_agg
-                   FROM (public.legacy_work_tags lt
-                     JOIN public.legacy_tags tg ON ((tg.id = lt.tag_id)))
-                  WHERE (lt.work_id = c.legacy_id)) AS tags,
-            COALESCE(( SELECT pt.value
-                   FROM ((public.relations r
-                     JOIN public.works pw ON (((pw.id = r.from_id) AND (pw.category = 'multipart'::text))))
-                     JOIN public.titles pt ON (((pt.res_id = pw.id) AND (pt.title_type = 'preferred'::text))))
-                  WHERE ((r.to_id = c.w) AND (r.type = 'work_has_part'::text))
-                 LIMIT 1), t.value) AS block_title,
-            ( SELECT r.locator
-                   FROM public.relations r
-                  WHERE ((r.to_id = c.w) AND (r.type = 'work_has_part'::text))
-                 LIMIT 1) AS part_locator,
-            pub.date_text AS date_full
-           FROM ((((((((cited c
-             JOIN public.manifestations m ON ((m.id = c.m)))
-             JOIN public.works wk ON ((wk.id = c.w)))
-             LEFT JOIN names n ON ((n.legacy_id = c.legacy_id)))
-             LEFT JOIN mtitle t ON ((t.res_id = c.m)))
-             LEFT JOIN pub ON ((pub.legacy_id = c.legacy_id)))
-             LEFT JOIN host h ON ((h.legacy_id = c.legacy_id)))
-             LEFT JOIN serial s ON ((s.legacy_id = c.legacy_id)))
-             LEFT JOIN mtitle st ON ((st.res_id = s.m)))
-        ), labelled AS (
-         SELECT b.legacy_id,
-            b.w,
-            b.m,
-            b.type,
-            b.authors,
-            b.editors,
-            b.translators,
-            b.keys,
-            b.title_value,
-            b.subtitle,
-            b.volume_label,
-            b.year,
-            b.publisher,
-            b.place,
-            b.journal,
-            b.issue_locator,
-            b.pages,
-            b.booktitle,
-            b.isbn,
-            b.doi,
-            b.url,
-            b.local_path,
-            b.edition,
-            b.series_name,
-            b.series_number,
-            b.note,
-            b.tags,
-            b.block_title,
-            b.part_locator,
-            b.date_full,
-            ((COALESCE(
-                CASE
-                    WHEN (cardinality(b.keys) >= 5) THEN (b.keys[1] || ' et al.'::text)
-                    ELSE array_to_string(b.keys, '–'::text)
-                END, '[no-author]'::text) || ' '::text) || COALESCE(b.year, '[no-year]'::text)) AS label0
-           FROM base b
-        ), keyed AS (
-         SELECT l.legacy_id,
-            l.w,
-            l.m,
-            l.type,
-            l.authors,
-            l.editors,
-            l.translators,
-            l.keys,
-            l.title_value,
-            l.subtitle,
-            l.volume_label,
-            l.year,
-            l.publisher,
-            l.place,
-            l.journal,
-            l.issue_locator,
-            l.pages,
-            l.booktitle,
-            l.isbn,
-            l.doi,
-            l.url,
-            l.local_path,
-            l.edition,
-            l.series_name,
-            l.series_number,
-            l.note,
-            l.tags,
-            l.block_title,
-            l.part_locator,
-            l.date_full,
-            l.label0,
-            (l.label0 ||
-                CASE
-                    WHEN (count(*) OVER (PARTITION BY l.label0) > 1) THEN chr((96 + (row_number() OVER (PARTITION BY l.label0 ORDER BY (regexp_replace(l.block_title, '^(a|az|the|an?|der|die|das|le|la|les|l''|il|lo|el)\s+'::text, ''::text, 'i'::text) COLLATE "hu-HU-x-icu"), l.date_full, l.part_locator, (regexp_replace(l.title_value, '^(a|az|the|an?|der|die|das|le|la|les|l''|il|lo|el)\s+'::text, ''::text, 'i'::text) COLLATE "hu-HU-x-icu"), l.legacy_id))::integer))
-                    ELSE ''::text
-                END) AS label
-           FROM labelled l
-        )
- SELECT label AS "Identifier",
-        CASE type
-            WHEN 'article'::text THEN 0
-            WHEN 'book'::text THEN 1
-            WHEN 'incollection'::text THEN 5
-            WHEN 'misc'::text THEN 10
-            ELSE NULL::integer
-        END AS "BibliographyType",
-    authors AS "Author",
-    editors AS "Editor",
-    (title_value || COALESCE((': '::text || subtitle), ''::text)) AS "Title",
-    subtitle AS "Subtitle",
-    year AS "Year",
-    publisher AS "Publisher",
-    place AS "Address",
-    journal AS "Journal",
-    COALESCE(volume_label,
-        CASE
-            WHEN (issue_locator ~ ', '::text) THEN split_part(issue_locator, ', '::text, 1)
-            WHEN (issue_locator ~ '/'::text) THEN split_part(issue_locator, '/'::text, 1)
-            ELSE NULL::text
-        END) AS "Volume",
-    COALESCE(
-        CASE
-            WHEN (issue_locator ~ ', '::text) THEN "substring"(issue_locator, ', (.*)$'::text)
-            WHEN (issue_locator ~ '/'::text) THEN "substring"(issue_locator, '/(.*)$'::text)
-            ELSE issue_locator
-        END, series_number) AS "Number",
-    pages AS "Pages",
-    isbn AS "ISBN",
-    url AS "URL",
-    doi AS "Custom1",
-    translators AS "Custom2",
-    tags AS "Custom3",
-    note AS "Note",
-    NULL::text AS "Annote",
-    booktitle AS "Booktitle",
-    NULL::text AS "Chapter",
-    edition AS "Edition",
-    NULL::text AS "Howpublished",
-    NULL::text AS "Institution",
-    NULL::text AS "Month",
-    NULL::text AS "Organizations",
-    NULL::text AS "School",
-    series_name AS "Series",
-    NULL::text AS "ReportType",
-    NULL::text AS "Custom4",
-    NULL::text AS "Custom5",
-    local_path AS "LocalURL"
-   FROM keyed;
+ SELECT "Identifier",
+    "BibliographyType",
+    "Author",
+    "Editor",
+    "Title",
+    "Subtitle",
+    "Year",
+    "Publisher",
+    "Address",
+    "Journal",
+    "Volume",
+    "Number",
+    "Pages",
+    "ISBN",
+    "URL",
+    "Custom1",
+    "Custom2",
+    "Custom3",
+    "Note",
+    "Annote",
+    "Booktitle",
+    "Chapter",
+    "Edition",
+    "Howpublished",
+    "Institution",
+    "Month",
+    "Organizations",
+    "School",
+    "Series",
+    "ReportType",
+    "Custom4",
+    "Custom5",
+    "LocalURL"
+   FROM public.lo_bibliography_rows('global'::text) lo_bibliography_rows(manifestation_id, "Identifier", "BibliographyType", "Author", "Editor", "Title", "Subtitle", "Year", "Publisher", "Address", "Journal", "Volume", "Number", "Pages", "ISBN", "URL", "Custom1", "Custom2", "Custom3", "Note", "Annote", "Booktitle", "Chapter", "Edition", "Howpublished", "Institution", "Month", "Organizations", "School", "Series", "ReportType", "Custom4", "Custom5", "LocalURL");
 
 
 --
@@ -1590,6 +1601,29 @@ CREATE TABLE public.manifestation_expressions (
 
 
 --
+-- Name: manifestation_statements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manifestation_statements (
+    id bigint NOT NULL,
+    manifestation_id bigint NOT NULL,
+    statement_type text NOT NULL,
+    source text,
+    value text NOT NULL,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text DEFAULT 'transcribed'::text NOT NULL,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    note text,
+    CONSTRAINT manifestation_statements_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT manifestation_statements_position_check CHECK (("position" > 0))
+);
+
+
+--
 -- Name: manifestation_statements_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -1600,6 +1634,20 @@ ALTER TABLE public.manifestation_statements ALTER COLUMN id ADD GENERATED ALWAYS
     NO MINVALUE
     NO MAXVALUE
     CACHE 1
+);
+
+
+--
+-- Name: manifestations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.manifestations (
+    id bigint DEFAULT public.new_res('manifestation'::text) NOT NULL,
+    kind text DEFAULT 'manifestation'::text NOT NULL,
+    category text NOT NULL,
+    extent text,
+    note text,
+    CONSTRAINT manifestations_kind_check CHECK ((kind = 'manifestation'::text))
 );
 
 
@@ -1731,6 +1779,41 @@ CREATE TABLE public.name_types (
 
 
 --
+-- Name: notes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.notes (
+    id bigint NOT NULL,
+    project_id bigint NOT NULL,
+    title text NOT NULL,
+    body text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: TABLE notes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.notes IS 'titled texts of a project (body in Markdown)';
+
+
+--
+-- Name: notes_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.notes ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.notes_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: particle_rules; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1847,6 +1930,31 @@ CREATE TABLE public.place_name_types (
 
 
 --
+-- Name: place_names; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.place_names (
+    id bigint NOT NULL,
+    place_id bigint NOT NULL,
+    name_type text DEFAULT 'official'::text NOT NULL,
+    value text NOT NULL,
+    is_preferred boolean DEFAULT false NOT NULL,
+    valid_from_year integer,
+    valid_to_year integer,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    reference_source text,
+    note text,
+    CONSTRAINT place_names_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT place_names_check1 CHECK ((valid_to_year >= valid_from_year))
+);
+
+
+--
 -- Name: place_names_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -1879,6 +1987,130 @@ CREATE TABLE public.places (
 --
 
 COMMENT ON COLUMN public.places.parent_id IS 'LRM-R34: the larger place this one is part of';
+
+
+--
+-- Name: project_member_sections; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_member_sections (
+    project_id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    section_id bigint NOT NULL
+);
+
+
+--
+-- Name: project_members; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_members (
+    project_id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    added_on date DEFAULT CURRENT_DATE NOT NULL,
+    note text,
+    CONSTRAINT project_members_res_kind_check CHECK ((res_kind = ANY (ARRAY['work'::text, 'expression'::text, 'manifestation'::text, 'item'::text])))
+);
+
+
+--
+-- Name: TABLE project_members; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.project_members IS 'what a project collects; in LibreOffice views a manifestation (an item counts as its manifestation)';
+
+
+--
+-- Name: project_sections; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_sections (
+    id bigint NOT NULL,
+    project_id bigint NOT NULL,
+    parent_id bigint,
+    label text NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    note text,
+    CONSTRAINT project_sections_check CHECK ((parent_id <> id)),
+    CONSTRAINT project_sections_position_check CHECK (("position" > 0))
+);
+
+
+--
+-- Name: TABLE project_sections; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.project_sections IS 'outline of a project (its own arrangement of the members); parent in the same project';
+
+
+--
+-- Name: project_sections_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.project_sections ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.project_sections_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: project_subjects; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.project_subjects (
+    project_id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    note text
+);
+
+
+--
+-- Name: TABLE project_subjects; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.project_subjects IS 'what a project is about: any res, at the level that fits (a work, a manifestation, a person …)';
+
+
+--
+-- Name: projects; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.projects (
+    id bigint NOT NULL,
+    code text NOT NULL,
+    name text NOT NULL,
+    parent_id bigint,
+    note text,
+    CONSTRAINT projects_check CHECK ((parent_id <> id)),
+    CONSTRAINT projects_code_check CHECK ((code ~ '^[a-z][a-z0-9_]{0,39}$'::text))
+);
+
+
+--
+-- Name: TABLE projects; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.projects IS 'research projects; code names the generated LibreOffice view (lo_project_<code>)';
+
+
+--
+-- Name: projects_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.projects ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.projects_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
 
 
 --
@@ -1935,6 +2167,37 @@ CREATE TABLE public.res (
 
 
 --
+-- Name: works; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.works (
+    id bigint DEFAULT public.new_res('work'::text) NOT NULL,
+    kind text DEFAULT 'work'::text NOT NULL,
+    category text NOT NULL,
+    date_text text,
+    date_sort integer,
+    date_sort_end integer,
+    note text,
+    CONSTRAINT works_check CHECK ((date_sort_end >= date_sort)),
+    CONSTRAINT works_kind_check CHECK ((kind = 'work'::text))
+);
+
+
+--
+-- Name: COLUMN works.date_text; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.works.date_text IS 'date of the work (of its creation) as to be displayed';
+
+
+--
+-- Name: COLUMN works.date_sort; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.works.date_sort IS 'first year, for sorting and filtering';
+
+
+--
 -- Name: qa_orphan_res; Type: VIEW; Schema: public; Owner: -
 --
 
@@ -1987,6 +2250,27 @@ CREATE TABLE public.relation_types (
     domain_kind text NOT NULL,
     range_kind text NOT NULL,
     note text
+);
+
+
+--
+-- Name: relations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.relations (
+    id bigint NOT NULL,
+    type text NOT NULL,
+    from_id bigint NOT NULL,
+    from_kind text NOT NULL,
+    to_id bigint NOT NULL,
+    to_kind text NOT NULL,
+    locator text,
+    "position" integer,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    note text,
+    CONSTRAINT relations_check CHECK ((from_id <> to_id)),
+    CONSTRAINT relations_position_check CHECK (("position" > 0))
 );
 
 
@@ -2090,6 +2374,39 @@ CREATE TABLE public.title_types (
 
 
 --
+-- Name: titles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.titles (
+    id bigint NOT NULL,
+    res_id bigint NOT NULL,
+    res_kind text NOT NULL,
+    title_type text NOT NULL,
+    source text,
+    value text NOT NULL,
+    subtitle text,
+    lang text,
+    script text DEFAULT 'Latn'::text NOT NULL,
+    derived_from bigint,
+    conversion_scheme text,
+    basis text,
+    certainty text DEFAULT 'certain'::text NOT NULL,
+    "position" integer DEFAULT 1 NOT NULL,
+    note text,
+    CONSTRAINT titles_check CHECK (((conversion_scheme IS NULL) OR (derived_from IS NOT NULL))),
+    CONSTRAINT titles_position_check CHECK (("position" > 0)),
+    CONSTRAINT titles_res_kind_check CHECK ((res_kind = ANY (ARRAY['work'::text, 'expression'::text, 'manifestation'::text])))
+);
+
+
+--
+-- Name: COLUMN titles.source; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.titles.source IS 'for manifestations: where the title was transcribed from';
+
+
+--
 -- Name: titles_id_seq; Type: SEQUENCE; Schema: public; Owner: -
 --
 
@@ -2183,11 +2500,27 @@ ALTER TABLE ONLY public.bases
 
 
 --
+-- Name: cards cards_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cards
+    ADD CONSTRAINT cards_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: certainties certainties_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.certainties
     ADD CONSTRAINT certainties_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: citations citations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citations
+    ADD CONSTRAINT citations_pkey PRIMARY KEY (id);
 
 
 --
@@ -2260,6 +2593,38 @@ ALTER TABLE ONLY public.contributions
 
 ALTER TABLE ONLY public.conversion_schemes
     ADD CONSTRAINT conversion_schemes_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: document_statuses document_statuses_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.document_statuses
+    ADD CONSTRAINT document_statuses_pkey PRIMARY KEY (code);
+
+
+--
+-- Name: documents documents_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.documents
+    ADD CONSTRAINT documents_code_key UNIQUE (code);
+
+
+--
+-- Name: documents documents_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.documents
+    ADD CONSTRAINT documents_pkey PRIMARY KEY (work_id);
+
+
+--
+-- Name: expressions expressions_id_work_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.expressions
+    ADD CONSTRAINT expressions_id_work_id_key UNIQUE (id, work_id);
 
 
 --
@@ -2535,6 +2900,14 @@ ALTER TABLE ONLY public.name_types
 
 
 --
+-- Name: notes notes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notes
+    ADD CONSTRAINT notes_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: particle_rules particle_rules_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2612,6 +2985,62 @@ ALTER TABLE ONLY public.place_names
 
 ALTER TABLE ONLY public.places
     ADD CONSTRAINT places_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: project_member_sections project_member_sections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_member_sections
+    ADD CONSTRAINT project_member_sections_pkey PRIMARY KEY (section_id, res_id);
+
+
+--
+-- Name: project_members project_members_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_members
+    ADD CONSTRAINT project_members_pkey PRIMARY KEY (project_id, res_id);
+
+
+--
+-- Name: project_sections project_sections_id_project_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_sections
+    ADD CONSTRAINT project_sections_id_project_id_key UNIQUE (id, project_id);
+
+
+--
+-- Name: project_sections project_sections_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_sections
+    ADD CONSTRAINT project_sections_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: project_subjects project_subjects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_subjects
+    ADD CONSTRAINT project_subjects_pkey PRIMARY KEY (project_id, res_id);
+
+
+--
+-- Name: projects projects_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.projects
+    ADD CONSTRAINT projects_code_key UNIQUE (code);
+
+
+--
+-- Name: projects projects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.projects
+    ADD CONSTRAINT projects_pkey PRIMARY KEY (id);
 
 
 --
@@ -2759,6 +3188,34 @@ ALTER TABLE ONLY public.works
 
 
 --
+-- Name: idx_cards_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cards_project ON public.cards USING btree (project_id);
+
+
+--
+-- Name: idx_cards_res; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_cards_res ON public.cards USING btree (res_id);
+
+
+--
+-- Name: idx_citations_cited; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_citations_cited ON public.citations USING btree (cited_id);
+
+
+--
+-- Name: idx_citations_citing; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_citations_citing ON public.citations USING btree (citing_expression_id);
+
+
+--
 -- Name: idx_collective_name_attestations_name; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2850,6 +3307,13 @@ CREATE INDEX idx_manifestation_statements_manifestation ON public.manifestation_
 
 
 --
+-- Name: idx_notes_project; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_notes_project ON public.notes USING btree (project_id);
+
+
+--
 -- Name: idx_person_name_attestations_name; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2875,6 +3339,13 @@ CREATE INDEX idx_person_names_person ON public.person_names USING btree (person_
 --
 
 CREATE INDEX idx_place_names_place ON public.place_names USING btree (place_id);
+
+
+--
+-- Name: idx_project_members_res; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_project_members_res ON public.project_members USING btree (res_id);
 
 
 --
@@ -2969,10 +3440,24 @@ CREATE TRIGGER agents_res_delete AFTER DELETE ON public.agents FOR EACH ROW EXEC
 
 
 --
+-- Name: cards cards_touch; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cards_touch BEFORE UPDATE ON public.cards FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+
+
+--
 -- Name: collectives collectives_res_delete; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER collectives_res_delete AFTER DELETE ON public.collectives FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: documents documents_lo_sync; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER documents_lo_sync AFTER INSERT OR DELETE OR UPDATE OF code ON public.documents FOR EACH STATEMENT EXECUTE FUNCTION public.lo_sync_trigger();
 
 
 --
@@ -3004,6 +3489,13 @@ CREATE TRIGGER manifestations_res_delete AFTER DELETE ON public.manifestations F
 
 
 --
+-- Name: notes notes_touch; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER notes_touch BEFORE UPDATE ON public.notes FOR EACH ROW EXECUTE FUNCTION public.touch_updated_at();
+
+
+--
 -- Name: persons persons_res_delete; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -3015,6 +3507,13 @@ CREATE TRIGGER persons_res_delete AFTER DELETE ON public.persons FOR EACH ROW EX
 --
 
 CREATE TRIGGER places_res_delete AFTER DELETE ON public.places FOR EACH ROW EXECUTE FUNCTION public.res_delete();
+
+
+--
+-- Name: projects projects_lo_sync; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER projects_lo_sync AFTER INSERT OR DELETE OR UPDATE OF code ON public.projects FOR EACH STATEMENT EXECUTE FUNCTION public.lo_sync_trigger();
 
 
 --
@@ -3038,6 +3537,54 @@ ALTER TABLE ONLY public.agents
 
 ALTER TABLE ONLY public.agents
     ADD CONSTRAINT agents_id_kind_fkey FOREIGN KEY (id, kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: cards cards_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cards
+    ADD CONSTRAINT cards_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: cards cards_res_id_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.cards
+    ADD CONSTRAINT cards_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: citations citations_basis_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citations
+    ADD CONSTRAINT citations_basis_fkey FOREIGN KEY (basis) REFERENCES public.bases(code);
+
+
+--
+-- Name: citations citations_cited_id_cited_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citations
+    ADD CONSTRAINT citations_cited_id_cited_kind_fkey FOREIGN KEY (cited_id, cited_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: citations citations_citing_expression_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citations
+    ADD CONSTRAINT citations_citing_expression_id_fkey FOREIGN KEY (citing_expression_id) REFERENCES public.expressions(id) ON DELETE CASCADE;
+
+
+--
+-- Name: citations citations_citing_manifestation_id_citing_expression_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.citations
+    ADD CONSTRAINT citations_citing_manifestation_id_citing_expression_id_fkey FOREIGN KEY (citing_manifestation_id, citing_expression_id) REFERENCES public.manifestation_expressions(manifestation_id, expression_id) ON DELETE CASCADE;
 
 
 --
@@ -3206,6 +3753,38 @@ ALTER TABLE ONLY public.conversion_schemes
 
 ALTER TABLE ONLY public.conversion_schemes
     ADD CONSTRAINT conversion_schemes_target_script_fkey FOREIGN KEY (target_script) REFERENCES public.scripts(code);
+
+
+--
+-- Name: documents documents_expression_id_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.documents
+    ADD CONSTRAINT documents_expression_id_work_id_fkey FOREIGN KEY (expression_id, work_id) REFERENCES public.expressions(id, work_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: documents documents_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.documents
+    ADD CONSTRAINT documents_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: documents documents_status_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.documents
+    ADD CONSTRAINT documents_status_fkey FOREIGN KEY (status) REFERENCES public.document_statuses(code);
+
+
+--
+-- Name: documents documents_work_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.documents
+    ADD CONSTRAINT documents_work_id_fkey FOREIGN KEY (work_id) REFERENCES public.works(id) ON DELETE CASCADE;
 
 
 --
@@ -3689,6 +4268,14 @@ ALTER TABLE ONLY public.name_element_placements
 
 
 --
+-- Name: notes notes_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.notes
+    ADD CONSTRAINT notes_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+
+
+--
 -- Name: particle_rules particle_rules_culture_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3886,6 +4473,78 @@ ALTER TABLE ONLY public.places
 
 ALTER TABLE ONLY public.places
     ADD CONSTRAINT places_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.places(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: project_member_sections project_member_sections_project_id_res_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_member_sections
+    ADD CONSTRAINT project_member_sections_project_id_res_id_fkey FOREIGN KEY (project_id, res_id) REFERENCES public.project_members(project_id, res_id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_member_sections project_member_sections_section_id_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_member_sections
+    ADD CONSTRAINT project_member_sections_section_id_project_id_fkey FOREIGN KEY (section_id, project_id) REFERENCES public.project_sections(id, project_id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_members project_members_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_members
+    ADD CONSTRAINT project_members_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_members project_members_res_id_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_members
+    ADD CONSTRAINT project_members_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: project_sections project_sections_parent_id_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_sections
+    ADD CONSTRAINT project_sections_parent_id_project_id_fkey FOREIGN KEY (parent_id, project_id) REFERENCES public.project_sections(id, project_id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_sections project_sections_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_sections
+    ADD CONSTRAINT project_sections_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_subjects project_subjects_project_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_subjects
+    ADD CONSTRAINT project_subjects_project_id_fkey FOREIGN KEY (project_id) REFERENCES public.projects(id) ON DELETE CASCADE;
+
+
+--
+-- Name: project_subjects project_subjects_res_id_res_kind_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.project_subjects
+    ADD CONSTRAINT project_subjects_res_id_res_kind_fkey FOREIGN KEY (res_id, res_kind) REFERENCES public.res(id, kind) ON DELETE CASCADE;
+
+
+--
+-- Name: projects projects_parent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.projects
+    ADD CONSTRAINT projects_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.projects(id) ON DELETE RESTRICT;
 
 
 --
