@@ -17,16 +17,15 @@ library. Nothing is written to the database: the output is a report per entry
 (Markdown) plus the raw records, for a human to decide what to accept.
 
 Usage
-  catalogue.py legacy [--id N ...] [--arcanum] [--out DIR]   check legacy_works rows
   catalogue.py lookup (--isbn X | --issn X | --lccn X | --doi X |
                        --title T [--author A] [--year Y]) [--source S ...]
   catalogue.py lookup --arcanum "phrase"
-Database access (legacy) uses psql with the libpq environment (PGHOST, PGUSER,
-PGPASSWORD, PGDATABASE; defaults localhost / postgres / libroyal).
+The per-entry report (run_entry) takes an entry as a flat row (title, year,
+publisher, isbn, authors …). It served the check of the pre-LRM entries; a mode
+feeding it entries of the four-level model is still to be written.
 """
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -36,7 +35,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from pathlib import Path
 
 MARC_NS = '{http://www.loc.gov/MARC21/slim}'
 USER_AGENT = 'libroyal-catalogue/0.1 (bibliographic validation)'
@@ -355,32 +353,10 @@ def rows_for(row, f):
     return out
 
 # ---------------------------------------------------------------------------
-# Legacy rows
-
-LEGACY_SQL = """
-SELECT coalesce(json_agg(r ORDER BY r.id), '[]') FROM (
-  SELECT w.id, w.type, w.title, w.subtitle, w.year, w.publisher, w.place, w.journal, w.volume,
-         w.issue, w.pages, w.doi, w.isbn, w.url, w.edition, w.booktitle, w.number,
-         s.name AS series, s.issn AS series_issn,
-         (SELECT json_agg(p.family_name || coalesce(', ' || p.given_name, '') ORDER BY c.position)
-            FROM legacy_work_contributors c JOIN legacy_persons p ON p.id = c.person_id
-           WHERE c.work_id = w.id AND c.role = 'author') AS authors,
-         (SELECT json_agg(p.family_name ORDER BY c.position)
-            FROM legacy_work_contributors c JOIN legacy_persons p ON p.id = c.person_id
-           WHERE c.work_id = w.id AND c.role IN ('author', 'editor')) AS family_names
-    FROM legacy_works w LEFT JOIN legacy_series s ON s.id = w.series_id) r
-"""
-
-
-def load_legacy():
-    env = {**os.environ}
-    args = ['psql', '-XAt', '-h', env.get('PGHOST', 'localhost'), '-U', env.get('PGUSER', 'postgres'),
-            '-d', env.get('PGDATABASE', 'libroyal'), '-c', LEGACY_SQL]
-    return json.loads(subprocess.run(args, capture_output=True, text=True, check=True, env=env).stdout)
-
+# Search plan
 
 def plan(row):
-    """Which searches to run for a legacy row: list of (source, query dict)."""
+    """Which searches to run for an entry row: list of (source, query dict)."""
     p = []
     fam = (row.get('family_names') or [''])[0]
     main_title = re.split(r'\s+Vol\.\s', row['title'])[0]
@@ -502,10 +478,6 @@ def run_entry(row, outdir, rawdir, use_arcanum=False):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
-    lg = sub.add_parser('legacy')
-    lg.add_argument('--id', type=int, nargs='*')
-    lg.add_argument('--arcanum', action='store_true', help='also search Arcanum ADT (one request per entry, slow)')
-    lg.add_argument('--out', default=str(Path(__file__).resolve().parents[2] / 'validation'))
     lk = sub.add_parser('lookup')
     for k in ('isbn', 'issn', 'lccn', 'doi', 'title', 'author', 'year'):
         lk.add_argument('--' + k)
@@ -527,19 +499,6 @@ def main():
             for x in recs:
                 print(json.dumps(extract(x, SOURCES[s]['flavor']), ensure_ascii=False, indent=1))
         return
-
-    out = Path(a.out)
-    raw = out / 'raw'
-    raw.mkdir(parents=True, exist_ok=True)
-    rows = [r for r in load_legacy() if not a.id or r['id'] in a.id]
-    index = ['# Validation of legacy entries', '', '| id | entry | results |', '|---|---|---|']
-    for r in rows:
-        print(f"legacy {r['id']}: {r['title'][:60]}", file=sys.stderr)
-        summ = run_entry(r, out, raw, a.arcanum)
-        index.append(f"| [{r['id']}]({r['id']:03d}.md) | {md_cell(', '.join(r.get('family_names') or []))} "
-                     f"{r.get('year') or ''} | {md_cell('<br>'.join(summ))} |")
-    (out / 'index.md').write_text('\n'.join(index) + '\n', encoding='utf-8')
-    print(f'report: {out / "index.md"}', file=sys.stderr)
 
 
 if __name__ == '__main__':

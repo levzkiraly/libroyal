@@ -21,3 +21,4 @@ research_layer [wemi_links places] 2026-11-02T00:07:14Z Lev Z. Király <lev.z.ki
 lo_views [research_layer lo_bibliography] 2026-11-02T00:07:15Z Lev Z. Király <lev.z.kiraly@gmail.com> # LibreOffice bibliography views per scope: lo_bibliography_rows(), lo_sync() and its triggers
 @research_layer 2026-11-02T00:07:15Z Lev Z. Király <lev.z.kiraly@gmail.com> # Research layer in place
 lo_bibliography [lo_bibliography@research_layer lo_views] 2026-11-02T00:07:16Z Lev Z. Király <lev.z.kiraly@gmail.com> # lo_bibliography as the global LibreOffice view over lo_bibliography_rows(); no longer reads legacy_map or the legacy tags
+drop_legacy [lo_bibliography legacy_mapping] 2026-11-03T05:20:00Z Lev Z. Király <lev.z.kiraly@gmail.com> # Drop the pre-LRM tables (legacy_*) and the correspondence tables; the data lives on in the four-level model

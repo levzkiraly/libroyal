@@ -40,6 +40,7 @@ in database backups, never here.
 | `research_layer` | What is ours rather than the catalogue's: projects with subjects (any res), members (any WEMI level) and sections; documents (own writings: a work and the expression being written); citations with locators on both sides; notes and cards |
 | `lo_views` | `lo_bibliography_rows(scope, id)`: the LibreOffice columns for the global scope, a project or a document, labels computed within the scope; `lo_sync()` and its triggers generate `lo_project_<code>` and `lo_document_<code>` |
 | `lo_bibliography` (reworked again, after `@research_layer`) | The global LibreOffice view: every entry of any project or document; Custom3 lists the projects |
+| `drop_legacy` | The pre-LRM tables (`legacy_*`) and the correspondence tables dropped; no record of the old ids is kept. The revert recreates them empty. The verify scripts of `baseline`, `legacy_rename` and `legacy_mapping` check their own result only until a later change supersedes it (read from the Sqitch registry) |
 
 A second target, `dev` (`libroyal_dev`), is configured for trying changes before they
 reach the live database: `sqitch deploy --verify dev`.
@@ -114,11 +115,12 @@ series are looked up as serials for their ISSN. A part record reachable only thr
 its set record (e.g. OSZK) still has to be found by hand.
 
 ```bash
-PGPASSWORD=… tools/catalogue/catalogue.py legacy [--id N …]   # reports in validation/
 tools/catalogue/catalogue.py lookup --isbn 9789639971677 --source oszk mokka
-tools/catalogue/catalogue.py legacy --id 24 --arcanum                # include Arcanum
+tools/catalogue/catalogue.py lookup --arcanum "Rohonci kódex"
 ```
 
-Reports (`validation/<id>.md`, `validation/index.md`) and the raw records
+The per-entry reports came from a `legacy` mode that checked the pre-LRM entries;
+it went with `drop_legacy`, and a mode for entries of the four-level model is still
+to be written. Reports (`validation/<id>.md`, `validation/index.md`) and the raw records
 (`validation/raw/`) are evidence for decisions, not data; `validation/` is not
 tracked by git.
